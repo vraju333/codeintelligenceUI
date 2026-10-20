@@ -1,0 +1,402 @@
+[
+  {
+    "query": "show country code mapping documents",
+    "expected_intent": "MAPPING_DOCUMENT_SEARCH"
+  },
+  {
+    "query": "show countryCode mapping documents",
+    "expected_intent": "MAPPING_DOCUMENT_SEARCH"
+  },
+  {
+    "query": "find mapping excel for country code",
+    "expected_intent": "MAPPING_DOCUMENT_SEARCH"
+  },
+  {
+    "query": "find mapping excel for countryCode",
+    "expected_intent": "MAPPING_DOCUMENT_SEARCH"
+  },
+  {
+    "query": "give me the mapping for country code",
+    "expected_intent": "MAPPING_DOCUMENT_SEARCH"
+  },
+  {
+    "query": "give me the mapping for countryCode",
+    "expected_intent": "MAPPING_DOCUMENT_SEARCH"
+  },
+  {
+    "query": "mapping for country code please",
+    "expected_intent": "MAPPING_DOCUMENT_SEARCH"
+  },
+  {
+    "query": "mapping for countryCode please",
+    "expected_intent": "MAPPING_DOCUMENT_SEARCH"
+  },
+  {
+    "query": "show source target mapping for country code",
+    "expected_intent": "MAPPING_DOCUMENT_SEARCH"
+  },
+  {
+    "query": "show source target mapping for countryCode",
+    "expected_intent": "MAPPING_DOCUMENT_SEARCH"
+  },
+  {
+    "query": "where is country code mapped",
+    "expected_intent": "MAPPING_DOCUMENT_SEARCH"
+  },
+  {
+    "query": "where is countryCode mapped",
+    "expected_intent": "MAPPING_DOCUMENT_SEARCH"
+  },
+  {
+    "query": "show XML mapping for country code",
+    "expected_intent": "MAPPING_DOCUMENT_SEARCH"
+  },
+  {
+    "query": "show XML mapping for countryCode",
+    "expected_intent": "MAPPING_DOCUMENT_SEARCH"
+  },
+  {
+    "query": "mapping workbook for country code",
+    "expected_intent": "MAPPING_DOCUMENT_SEARCH"
+  },
+  {
+    "query": "mapping workbook for countryCode",
+    "expected_intent": "MAPPING_DOCUMENT_SEARCH"
+  },
+  {
+    "query": "what document maps country code",
+    "expected_intent": "MAPPING_DOCUMENT_SEARCH"
+  },
+  {
+    "query": "what document maps countryCode",
+    "expected_intent": "MAPPING_DOCUMENT_SEARCH"
+  },
+  {
+    "query": "list imported mapping rows for country code",
+    "expected_intent": "MAPPING_DOCUMENT_SEARCH"
+  },
+  {
+    "query": "list imported mapping rows for countryCode",
+    "expected_intent": "MAPPING_DOCUMENT_SEARCH"
+  },
+  {
+    "query": "how is country code mapped",
+    "expected_intent": "MAPPING_EXPLANATION"
+  },
+  {
+    "query": "how is countryCode mapped",
+    "expected_intent": "MAPPING_EXPLANATION"
+  },
+  {
+    "query": "explain the mapping of country code",
+    "expected_intent": "MAPPING_EXPLANATION"
+  },
+  {
+    "query": "explain the mapping of countryCode",
+    "expected_intent": "MAPPING_EXPLANATION"
+  },
+  {
+    "query": "what transforms country code",
+    "expected_intent": "MAPPING_EXPLANATION"
+  },
+  {
+    "query": "what transforms countryCode",
+    "expected_intent": "MAPPING_EXPLANATION"
+  },
+  {
+    "query": "what source feeds country code",
+    "expected_intent": "MAPPING_EXPLANATION"
+  },
+  {
+    "query": "what source feeds countryCode",
+    "expected_intent": "MAPPING_EXPLANATION"
+  },
+  {
+    "query": "which target receives country code",
+    "expected_intent": "MAPPING_EXPLANATION"
+  },
+  {
+    "query": "which target receives countryCode",
+    "expected_intent": "MAPPING_EXPLANATION"
+  },
+  {
+    "query": "trace XML to Java for country code",
+    "expected_intent": "MAPPING_EXPLANATION"
+  },
+  {
+    "query": "trace XML to Java for countryCode",
+    "expected_intent": "MAPPING_EXPLANATION"
+  },
+  {
+    "query": "describe country code transformation",
+    "expected_intent": "MAPPING_EXPLANATION"
+  },
+  {
+    "query": "describe countryCode transformation",
+    "expected_intent": "MAPPING_EXPLANATION"
+  },
+  {
+    "query": "what is the mapping rule for country code",
+    "expected_intent": "MAPPING_EXPLANATION"
+  },
+  {
+    "query": "what is the mapping rule for countryCode",
+    "expected_intent": "MAPPING_EXPLANATION"
+  },
+  {
+    "query": "where does country code come from",
+    "expected_intent": "MAPPING_EXPLANATION"
+  },
+  {
+    "query": "where does countryCode come from",
+    "expected_intent": "MAPPING_EXPLANATION"
+  },
+  {
+    "query": "show country code source and target",
+    "expected_intent": "MAPPING_EXPLANATION"
+  },
+  {
+    "query": "show countryCode source and target",
+    "expected_intent": "MAPPING_EXPLANATION"
+  },
+  {
+    "query": "does mapping for country code match Java validation",
+    "expected_intent": "CROSS_SOURCE_COMPARISON"
+  },
+  {
+    "query": "does mapping for countryCode match Java validation",
+    "expected_intent": "CROSS_SOURCE_COMPARISON"
+  },
+  {
+    "query": "compare country code XML rule and code",
+    "expected_intent": "CROSS_SOURCE_COMPARISON"
+  },
+  {
+    "query": "compare countryCode XML rule and code",
+    "expected_intent": "CROSS_SOURCE_COMPARISON"
+  },
+  {
+    "query": "is country code mapping consistent with validation",
+    "expected_intent": "CROSS_SOURCE_COMPARISON"
+  },
+  {
+    "query": "is countryCode mapping consistent with validation",
+    "expected_intent": "CROSS_SOURCE_COMPARISON"
+  },
+  {
+    "query": "check contract mismatch for country code",
+    "expected_intent": "CROSS_SOURCE_COMPARISON"
+  },
+  {
+    "query": "check contract mismatch for countryCode",
+    "expected_intent": "CROSS_SOURCE_COMPARISON"
+  },
+  {
+    "query": "compare mapping document against code for country code",
+    "expected_intent": "CROSS_SOURCE_COMPARISON"
+  },
+  {
+    "query": "compare mapping document against code for countryCode",
+    "expected_intent": "CROSS_SOURCE_COMPARISON"
+  },
+  {
+    "query": "does the country code mapping agree with Java",
+    "expected_intent": "CROSS_SOURCE_COMPARISON"
+  },
+  {
+    "query": "does the countryCode mapping agree with Java",
+    "expected_intent": "CROSS_SOURCE_COMPARISON"
+  },
+  {
+    "query": "find mapping code discrepancy for country code",
+    "expected_intent": "CROSS_SOURCE_COMPARISON"
+  },
+  {
+    "query": "find mapping code discrepancy for countryCode",
+    "expected_intent": "CROSS_SOURCE_COMPARISON"
+  },
+  {
+    "query": "validate country code mapping against source code",
+    "expected_intent": "CROSS_SOURCE_COMPARISON"
+  },
+  {
+    "query": "validate countryCode mapping against source code",
+    "expected_intent": "CROSS_SOURCE_COMPARISON"
+  },
+  {
+    "query": "is the country code transformation implemented correctly",
+    "expected_intent": "CROSS_SOURCE_COMPARISON"
+  },
+  {
+    "query": "is the countryCode transformation implemented correctly",
+    "expected_intent": "CROSS_SOURCE_COMPARISON"
+  },
+  {
+    "query": "show conflicts between country code mapping and code",
+    "expected_intent": "CROSS_SOURCE_COMPARISON"
+  },
+  {
+    "query": "show conflicts between countryCode mapping and code",
+    "expected_intent": "CROSS_SOURCE_COMPARISON"
+  },
+  {
+    "query": "who changed country code validation",
+    "expected_intent": "GIT_HISTORY"
+  },
+  {
+    "query": "who changed countryCode validation",
+    "expected_intent": "GIT_HISTORY"
+  },
+  {
+    "query": "show commits for country code",
+    "expected_intent": "GIT_HISTORY"
+  },
+  {
+    "query": "show commits for countryCode",
+    "expected_intent": "GIT_HISTORY"
+  },
+  {
+    "query": "latest code change to country code",
+    "expected_intent": "GIT_HISTORY"
+  },
+  {
+    "query": "latest code change to countryCode",
+    "expected_intent": "GIT_HISTORY"
+  },
+  {
+    "query": "what changed in Java for country code",
+    "expected_intent": "GIT_HISTORY"
+  },
+  {
+    "query": "what changed in Java for countryCode",
+    "expected_intent": "GIT_HISTORY"
+  },
+  {
+    "query": "show git history of country code",
+    "expected_intent": "GIT_HISTORY"
+  },
+  {
+    "query": "show git history of countryCode",
+    "expected_intent": "GIT_HISTORY"
+  },
+  {
+    "query": "which method was modified for country code",
+    "expected_intent": "GIT_HISTORY"
+  },
+  {
+    "query": "which method was modified for countryCode",
+    "expected_intent": "GIT_HISTORY"
+  },
+  {
+    "query": "show commit SHA for country code",
+    "expected_intent": "GIT_HISTORY"
+  },
+  {
+    "query": "show commit SHA for countryCode",
+    "expected_intent": "GIT_HISTORY"
+  },
+  {
+    "query": "who authored country code change",
+    "expected_intent": "GIT_HISTORY"
+  },
+  {
+    "query": "who authored countryCode change",
+    "expected_intent": "GIT_HISTORY"
+  },
+  {
+    "query": "show affected APIs for country code commit",
+    "expected_intent": "GIT_HISTORY"
+  },
+  {
+    "query": "show affected APIs for countryCode commit",
+    "expected_intent": "GIT_HISTORY"
+  },
+  {
+    "query": "find code changes related to country code",
+    "expected_intent": "GIT_HISTORY"
+  },
+  {
+    "query": "find code changes related to countryCode",
+    "expected_intent": "GIT_HISTORY"
+  },
+  {
+    "query": "which JIRA changed country code",
+    "expected_intent": "JIRA_SEARCH"
+  },
+  {
+    "query": "which JIRA changed countryCode",
+    "expected_intent": "JIRA_SEARCH"
+  },
+  {
+    "query": "latest jira for country code",
+    "expected_intent": "JIRA_SEARCH"
+  },
+  {
+    "query": "latest jira for countryCode",
+    "expected_intent": "JIRA_SEARCH"
+  },
+  {
+    "query": "show jira requirements for country code",
+    "expected_intent": "JIRA_SEARCH"
+  },
+  {
+    "query": "show jira requirements for countryCode",
+    "expected_intent": "JIRA_SEARCH"
+  },
+  {
+    "query": "find jira issues mentioning country code",
+    "expected_intent": "JIRA_SEARCH"
+  },
+  {
+    "query": "find jira issues mentioning countryCode",
+    "expected_intent": "JIRA_SEARCH"
+  },
+  {
+    "query": "which ticket tracks country code",
+    "expected_intent": "JIRA_SEARCH"
+  },
+  {
+    "query": "which ticket tracks countryCode",
+    "expected_intent": "JIRA_SEARCH"
+  },
+  {
+    "query": "show CAS-2 jira details",
+    "expected_intent": "JIRA_SEARCH"
+  },
+  {
+    "query": "show CAS-2 jira details",
+    "expected_intent": "JIRA_SEARCH"
+  },
+  {
+    "query": "find jira created for country code",
+    "expected_intent": "JIRA_SEARCH"
+  },
+  {
+    "query": "find jira created for countryCode",
+    "expected_intent": "JIRA_SEARCH"
+  },
+  {
+    "query": "show indexed jira for country code",
+    "expected_intent": "JIRA_SEARCH"
+  },
+  {
+    "query": "show indexed jira for countryCode",
+    "expected_intent": "JIRA_SEARCH"
+  },
+  {
+    "query": "what issue introduced country code",
+    "expected_intent": "JIRA_SEARCH"
+  },
+  {
+    "query": "what issue introduced countryCode",
+    "expected_intent": "JIRA_SEARCH"
+  },
+  {
+    "query": "show requirement tickets for country code",
+    "expected_intent": "JIRA_SEARCH"
+  },
+  {
+    "query": "show requirement tickets for countryCode",
+    "expected_intent": "JIRA_SEARCH"
+  }
+]
