@@ -22,20 +22,36 @@
 
 #workspaceMenu{background:#132b42;color:#dcecff;border:1px solid #30485e;border-radius:6px;padding:6px;max-width:125px}
 
-/* Graph-lineage Impact Analysis: evidence-first, project-scoped */
-.impact-result{margin-top:12px;border:1px solid var(--edge);border-radius:10px;background:#102334}
-.impact-result .ci-result{padding:0;gap:10px}
-.impact-result .ci-result-head{padding:0 0 12px}
-.impact-counters{display:flex;flex-wrap:wrap;gap:10px}
-.impact-counters>div{min-width:140px;padding:12px 16px;border:1px solid #30475d;border-radius:8px;background:#14283b;display:flex;flex-direction:column}
-.impact-counters strong{font-size:24px}.impact-counters span{font-size:11px;color:var(--muted)}
-.impact-graph{border:1px solid #2e4c67;border-radius:8px;overflow:hidden}
-.impact-graph summary{padding:11px 13px;background:#163047;cursor:pointer;font-weight:600}
-.impact-json{white-space:pre-wrap;overflow-wrap:anywhere;max-height:350px;overflow:auto;padding:12px;font:11px/1.6 Consolas,monospace;color:#c7d8e8}
-.ci-status-muted{background:#293745;border-color:#485a6a;color:#c5d0da}
-/* Requirement-first impact screen */
-.impact-entry{border:1px solid var(--border,#27405a);padding:18px;border-radius:12px;margin-bottom:18px;background:rgba(50,100,160,.06)}
-.impact-entry .field select{min-width:160px;background:#1d3147;color:#e7f2ff;border:1px solid #36516e;border-radius:7px;padding:10px}
-.impact-evidence-section{margin:16px 0;padding:10px 0;border-top:1px solid #294058}
-.impact-evidence-section h3{margin:5px 0 10px}
-.impact-chip{display:inline-block;padding:6px 9px;margin:5px 4px 0 0;background:#183751;border-radius:7px;color:#d5eaff}
+/* VNext: full-width, evidence-first workspace across every tab */
+.shell,.shell:not(:has(.rightbar:not([hidden]))){grid-template-columns:208px minmax(0,1fr)!important}
+.workspace{width:100%;max-width:none;min-width:0;padding:16px 20px 28px}
+.rightbar,.agent,#insightsPanel{display:none!important}
+.columns{display:block}.graph-panel{width:100%;min-height:0}.graph-panel>.panel-heading{padding:12px 18px}
+#mainBody{padding:0;min-width:0}.section{padding:14px 18px 20px}.section>.impact-entry{margin:0}
+.section .field{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.section .field select{flex:0 0 170px}.section .field input{flex:1 1 260px}.section .field .primary{flex:0 0 auto}
+.impact-entry{padding:16px;border:1px solid var(--edge);border-radius:10px;background:#142638}.impact-entry h3{font-size:15px;margin:0 0 10px}.impact-entry .ci-sub{margin-top:8px}
+.ev-dashboard{padding:16px 18px 22px;min-width:0}.ev-heading{margin-bottom:14px}.ev-heading h2{font-size:18px;margin:0 0 4px}.ev-heading p{margin:0;color:var(--muted)}
+.ev-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;align-items:start}.ev-card{background:#122537;border:1px solid #2a455c;border-radius:10px;min-width:0;overflow:hidden}
+.ev-card-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 14px;background:#183550;border-bottom:1px solid #2a455c}.ev-card-head h3{font-size:14px;margin:0;color:#eaf4ff}.ev-card-head h3 span{color:#78baff;margin-right:5px}.ev-tag{font-size:10px;color:#a8d1f6;white-space:nowrap}
+.ev-card-body{padding:5px 14px 10px;min-width:0;max-height:290px;overflow-y:auto}.ev-line{padding:10px 0;border-bottom:1px solid #294154;overflow-wrap:anywhere}.ev-line:last-child{border-bottom:0}.ev-line strong{font-size:12px;display:block;color:#f1f8ff}.ev-line div{color:#c2d4e3;margin-top:3px;font-size:12px}.ev-line small{display:block;color:#93b3cd;margin-top:5px}.ev-line a{color:#80c4ff;font-size:12px}
+.ev-muted{color:#a8bacb}.ev-attention{border:1px solid #87623b;background:#32291e;border-radius:10px;padding:12px 15px;margin-bottom:14px}.ev-attention h3{margin:0 0 8px;font-size:14px}.ev-alert{font-size:12px;padding:5px 0}.ev-alert div{margin-top:4px}.ev-readable{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.65;max-height:260px;overflow-y:auto}.ev-technical{margin-top:18px;border:1px solid #2a455c;border-radius:8px}.ev-technical summary{padding:12px 15px;cursor:pointer;color:#a9c9e4;font-weight:600}.ev-technical p{padding:0 14px;color:#9db4c8}.ev-technical pre{padding:12px;overflow:auto;max-height:420px;font-size:11px;white-space:pre-wrap;overflow-wrap:anywhere}
+#metrics{display:none!important}#bottomGrid{display:none!important}.followup{margin-top:14px}
+@media(min-width:1550px){.ev-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:1050px){.shell,.shell:not(:has(.rightbar:not([hidden]))){grid-template-columns:175px minmax(0,1fr)!important}}
+@media(max-width:800px){.shell,.shell:not(:has(.rightbar:not([hidden]))){display:block!important}.ev-grid{grid-template-columns:1fr}.workspace{padding:10px}.section .field select{flex:1 1 100%}.section .field .primary{flex:1 1 100%}}
+
+/* Knowledge Hub source cards */
+.kh-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:4px 0 18px}
+.kh-metrics>div{background:#152d45;border:1px solid #294a66;border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:6px}
+.kh-metrics strong{font-size:26px;color:#f1f7ff}.kh-metrics span{font-size:12px;color:#a9c4e2}
+.kh-group{border:1px solid #29445f;border-radius:9px;margin:12px 0;overflow:hidden;background:#102436}
+.kh-group>summary{cursor:pointer;padding:15px;background:#1b4067;color:#dceeff;font-weight:600}
+.kh-rows .item{padding:13px 16px;border-top:1px solid #29445f;overflow-wrap:anywhere}
+.kh-source-error{margin:10px 0;padding:12px;border:1px solid #8c6630;border-radius:8px;color:#f7d8a4}
+.kh-group .field,.kh-group .impact-json{margin:14px}
+@media(max-width:650px){.kh-metrics{grid-template-columns:1fr}}
+
+/* Keep ASK-only composer, history, suggestions and follow-up out of other workspaces. */
+body.ci-other-workspace .sidebar,body.ci-other-workspace .query,body.ci-other-workspace .followup,body.ci-other-workspace .tabs,body.ci-other-workspace .agent{display:none!important}
+body.ci-other-workspace .shell,body.ci-other-workspace .shell:not(:has(.rightbar:not([hidden]))){grid-template-columns:minmax(0,1fr)!important}
+body.ci-other-workspace .workspace{width:100%;min-width:0}

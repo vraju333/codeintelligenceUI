@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parent
 BACKEND = os.getenv('CI_BACKEND_URL', 'http://127.0.0.1:8081').rstrip('/')
 ALLOWED = {
  '/health', '/api/projects', '/api/jira-knowledge', '/api/jira-knowledge/search',
- '/api/knowledge-agent/ask', '/api/knowledge-base/documents', '/api/knowledge-base/search',
+ '/api/knowledge-agent/ask', '/api/test-suites/search', '/api/knowledge-base/documents', '/api/knowledge-base/search',
  '/api/knowledge-sync/status', '/api/knowledge-sync/runs', '/api/knowledge-sync/sync-all',
  '/api/mapping-intelligence/documents', '/api/mapping-intelligence/search',
  '/api/mapping-intelligence/lineage', '/api/mapping-intelligence/graph-lineage',
@@ -51,7 +51,7 @@ async def gateway(path: str, request: Request):
         raise HTTPException(502, 'Backend returned non-JSON response') from exc
 
 @app.get('/ui/agent/events')
-async def events(query: str):
+async def events(query: str, project_path: str = "", project: str = ""):
     """AG-UI-inspired event adapter; does not claim to be official AG-UI protocol."""
     if not query.strip():
         raise HTTPException(400, 'Query is required')
@@ -62,7 +62,7 @@ async def events(query: str):
         yield event('STEP_STARTED', {'step':'Retrieving verified engineering evidence'})
         try:
             async with httpx.AsyncClient(timeout=120) as client:
-                response = await client.post(BACKEND + '/api/knowledge-agent/ask', json={'query':query})
+                response = await client.post(BACKEND + '/api/knowledge-agent/ask', json={'query':query, 'project_path':project_path or project or None})
                 response.raise_for_status()
                 result = response.json()
             yield event('STEP_FINISHED', {'step':'Retrieving verified engineering evidence'})
