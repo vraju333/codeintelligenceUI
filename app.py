@@ -55,6 +55,8 @@ async def events(query: str, project_path: str = "", project: str = ""):
     """AG-UI-inspired event adapter; does not claim to be official AG-UI protocol."""
     if not query.strip():
         raise HTTPException(400, 'Query is required')
+    if not (project_path or project).strip():
+        raise HTTPException(400, 'Select an indexed project before using ASK')
     async def stream():
         def event(name, value):
             return 'event: ' + name + '\ndata: ' + json.dumps(value, ensure_ascii=False) + '\n\n'
