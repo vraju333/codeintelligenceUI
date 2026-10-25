@@ -387,6 +387,16 @@ function proposedOperationCards(r){
    <div style="padding:0 16px 12px"><p style="margin:0 0 8px;font-size:12px;opacity:.8">Controller entry points only; attribute-to-operation dependencies are not yet verified.</p>${entries}</div>
   </details>`];
 }
+function attributeEvidenceBanner(r){
+ if(!['COMBINED_ATTRIBUTE_EVIDENCE','COMPLETE_ATTRIBUTE_HISTORY'].includes(r?.source))return '';
+ const verified=array(r.attribute_verified_paths),candidates=array(r.unverified_attribute_paths);
+ const endpoints=paths=>[...new Set(paths.map(p=>p.endpoint).filter(Boolean))];
+ const row=(title,items,empty)=>`<details class="ev-technical" open><summary>${esc(title)} · ${items.length}</summary><div style="padding:12px">${items.length?items.map(x=>`<div>${esc(x)}</div>`).join(''):esc(empty)}</div></details>`;
+ return `<section class="ci-result"><h3>Attribute impact · ${esc(r.attribute||'')}</h3><p class="ci-sub">Source evidence is distinct from candidate relationships. QA imports are not proof of execution.</p>
+ ${row('Attribute-verified API paths',endpoints(verified),'No attribute-specific endpoint independently established')}
+ ${row('Unverified API candidates',endpoints(candidates),'No additional candidates')}
+ <p class="ci-sub">${esc(array(r.verified_change_jiras).join(', ')||'No verified semantic JIRA changes')}</p></section>`;
+}
 function renderAskEvidence(r){
  if(r?.intent==='JIRA_IMPACT_ANALYSIS'||r?.source==='JIRA_REQUIREMENT_IMPACT')return renderAdaptiveImpact(r);
  if(r?.source==='MAPPING_DOCUMENT_EVIDENCE'&&askPresentation(r).primary.has('mappings'))return `<div class="ev-dashboard">${mappingContent(r)}${technicalDetails(r)}</div>`;
@@ -471,7 +481,7 @@ function renderAnswer(r){
  metrics.forEach(([id,value,visible])=>{const el=$(id);el.textContent=visible?String(value):'—';el.closest('.metric').hidden=!visible});
  setVisible('metrics',metrics.some(x=>x[2]));
  $('mainTitle').textContent=mapping?'Mapping evidence':hasCode?'Engineering evidence':'ASK result';
- $('mainBody').innerHTML=renderAskEvidence(r);
+ $('mainBody').innerHTML=attributeEvidenceBanner(r)+renderAskEvidence(r);
  bindImpactFocusButtons();
  if(state.view==='ask' && r?.source!=='MAPPING_DOCUMENT_EVIDENCE')enrichAskJiraSubjects(r);
  $('insights').innerHTML=mapping?item('Evidence source',`${docs.length} imported mapping document(s) · ${rows.length} row(s)`)+(r.note?item('Evidence boundary',r.note):''):item('Evidence source',r.source||r.status||'ASK result')+(r.note?item('Evidence boundary',r.note):'');
@@ -663,12 +673,70 @@ async function loadKnowledgeHub(){if(!requireProject())return notice('Select an 
  if(responses[1]?.status==='fulfilled'&&!mapped.length&&mapping.length)html+=`<div class="ci-sub">Mapping API returned no documents; showing ${mapping.length} mapping document(s) from the indexed Knowledge Hub.</div>`;
  return html;
 }
+
+function baselineCapturePanel(){
+ return `<section class="ci-baseline-panel"><h3>Capture Main Baseline</h3>
+ <p class="ci-sub">Explicitly capture a main baseline for an existing scenario. No tests are executed by this action.</p>
+ <div class="ci-baseline-fields"><label>Scenario ID<input id="ciBaselineScenario" type="number" min="1" step="1" value="15"></label>
+ <label>Baseline / release name<input id="ciBaselineMonth" placeholder="October 2026"></label></div>
+ <label>Successful response JSON (optional; only actual observed evidence)
+ <textarea id="ciBaselineResponse" rows="3" placeholder='{"customerId":"..."}'></textarea></label>
+ <div class="ci-baseline-actions"><button type="button" id="ciBaselineCheck">Check existing baseline</button>
+ <button type="button" id="ciBaselineCapture" class="primary">Capture Main Baseline</button></div>
+ <div id="ciBaselineStatus" aria-live="polite"></div>
+ <p class="ci-sub">Main baselines do not automatically link JIRAs, imported test suites, or execution results.</p></section>`;
+}
+function wireBaselineCapture(){
+ const status=$('ciBaselineStatus'),capture=$('ciBaselineCapture'),check=$('ciBaselineCheck');
+ const scenario=()=>{const n=Number($('ciBaselineScenario').value);if(!Number.isSafeInteger(n)||n<1)throw Error('Enter a valid scenario ID');return n};
+ const show=msg=>{status.innerHTML=notice(msg)};
+ const latest=async id=>{
+  const r=await fetch('/ui/api'+projectApiPath(`/api/scenario-baselines/latest/${id}`));
+  const d=await r.json().catch(()=>({}));
+  const detail=typeof d.detail==='string'?d.detail:fmt(d.detail||'');
+  if (
+  r.status === 404 &&
+  detail.toLowerCase().includes('no baseline found')
+) {
+  return null;
+}
+  if(!r.ok)throw Error(detail||`HTTP ${r.status}`);
+  return d;
+ };
+ check.onclick=async()=>{
+  if(!requireProject())return;
+  check.disabled=true;
+  try{
+   const id=scenario(),existing=await latest(id);
+   show(existing?`Existing main baseline for scenario ${id}: ${fmt(existing)}. No duplicate will be created.`:`No main baseline exists for scenario ${id}.`);
+  }catch(e){show(`Check failed: ${e.message}`)}finally{check.disabled=false}
+ };
+ capture.onclick=async()=>{
+  if(!requireProject())return;
+  capture.disabled=true;
+  try{
+   const id=scenario(),name=$('ciBaselineMonth').value.trim();
+   if(!name)throw Error('Enter a baseline/release name');
+   let response=null;const raw=$('ciBaselineResponse').value.trim();
+   if(raw){try{response=JSON.parse(raw)}catch{throw Error('Successful response must be valid JSON')}}
+   const existing=await latest(id);
+   if(existing){show(`Existing main baseline found for scenario ${id}; capture cancelled to avoid a duplicate.`);return}
+   if(!confirm(`Capture a main baseline for scenario ${id} (${name}) in the selected project? This writes a database record but does not run tests.`))return;
+   const data=await api(`/api/scenario-baselines/capture/${id}`,{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({baseline_name:name,successful_response:response,endpoint_flow:null})
+   });
+   status.innerHTML=`<div class="notice">Main baseline captured for scenario ${esc(id)}.</div><pre class="evidence">${esc(fmt(data))}</pre>`;
+  }catch(e){show(`Capture not completed: ${e.message}`)}finally{capture.disabled=false}
+ };
+}
+
 async function loadView(view){state.view=view;if(!state.project){setView(view);$('mainTitle').textContent='Project selection required';$('mainBody').innerHTML=notice('Choose an indexed project in the top navigation before opening a workspace.');return;}setView(view);const title=({impact:'Impact Analysis',knowledge:'Knowledge Hub',releases:'Release Intelligence',jira:'JIRA Intelligence',mappings:'Mapping Intelligence',tests:'Testing & Baselines',evaluation:'Evaluation & Diagnostics'})[view];if(view==='ask'){renderAnswer(state.result||{answer:'Ask a question to retrieve live CodeIntelligence evidence.'});return}let html=`<div class="section">`;try{if(view==='knowledge'){html+=await loadKnowledgeHub()}
 else if(view==='jira'){const data=await api('/api/jira-knowledge');html+=`<div class="field"><input id="jiraQuery" placeholder="Search Jira requirements, e.g. country code"><button id="jiraSearch" class="primary">Search</button></div><div id="jiraResults"></div><details open><summary>Indexed JIRA requirements (${listOf(data).length})</summary>${listOf(data).map(x=>item(x.jira_id||x.jira_key||x.key||'Jira',x.title||x.requirement||'')).join('')||notice('No indexed Jira issues')}</details>`}
 else if(view==='mappings'){const docs=await api('/api/mapping-intelligence/documents');html+=`<div class="field"><input id="mapAttribute" placeholder="Attribute e.g. countryCode"><button id="mapSearch" class="primary">Trace mappings</button></div><div id="mapResults"></div><details open><summary>Mapping documents (${listOf(docs).length})</summary>${listOf(docs).map(x=>item(x.title||x.filename||'Mapping',x.document_version||x.source_ref||'')).join('')||notice('No mapping documents')}</details>`}
 else if(view==='impact'){html+=`<div class="impact-entry"><h3>Find related changes and evidence</h3><div class="field"><select id="impactMode" aria-label="Impact analysis entry point"><option value="jira">JIRA</option><option value="requirement">Business requirement</option><option value="attribute">Attribute</option></select><input id="impactAttribute" placeholder="JIRA key, e.g. CAS-10"><button id="impactSearch" class="primary">Analyze impact</button></div><div class="ci-sub">Project: ${esc(state.project||'Select a project in the top navigation')}</div></div><div id="impactResults"></div>`}
-else if(view==='releases'){html+=`<div class="field"><input id="releaseKey" value="OCT-2026" placeholder="Release key"><input id="releaseProject" readonly placeholder="Selected project"><button class="primary" id="releaseSearch">Load report</button></div><div id="releaseResults"></div><details><summary>Compare immutable baselines</summary><div class="field"><input id="fromVersion" type="number" min="1" value="1"><input id="toVersion" type="number" min="1" value="2"><button class="primary" id="releaseCompare">Compare</button></div><div id="compareResults"></div></details>${notice('This UI is read-only for baseline capture; historical versions are never altered here.')}`}
-else if(view==='tests'){html+=`<div class="field"><input id="testQuery" value="test data for countryCode please"><button id="testSearch" class="primary">Retrieve QA evidence</button></div><div id="testResults"></div>${notice('Imported test plans and separately recorded execution evidence are distinguished by the backend.')}`}
+else if(view==='releases'){html+=`<div class="field"><input id="releaseKey" value="OCT-2026" placeholder="Release key"><input id="releaseProject" readonly placeholder="Selected project"><button class="primary" id="releaseSearch">Load report</button></div><div id="releaseResults"></div><details><summary>Compare immutable baselines</summary><div class="field"><input id="fromVersion" type="number" min="1" value="1"><input id="toVersion" type="number" min="1" value="2"><button class="primary" id="releaseCompare">Compare</button></div><div id="compareResults"></div></details>${notice('Release snapshots preserve explicit release JIRAs, project documents, Git HEAD and recorded test evidence. Create the release with its JIRAs first.')}<div class="section"><h3>Immutable Release Snapshot</h3><div class="field"><input id="snapshotOwner" placeholder="Finalized by (required)"><button id="snapshotPreview" class="primary">Preview snapshot</button><button id="snapshotFinalize">Finalize snapshot</button></div><div id="snapshotResult"></div></div>`}
+else if(view==='tests'){html+=baselineCapturePanel();html+=`<div class="field"><input id="testQuery" value="test data for countryCode please"><button id="testSearch" class="primary">Retrieve QA evidence</button></div><div id="testResults"></div>${notice('Imported test plans and separately recorded execution evidence are distinguished by the backend.')}`}
 else if(view==='evaluation'){const health=await api('/health');const status=await api('/api/storage/status');html+=`<details open><summary>Backend health</summary><div class="evidence">${esc(fmt(health))}</div></details><details open><summary>Persistence status</summary><div class="evidence">${esc(fmt(status))}</div></details>${notice('No accuracy percentage is invented; use your existing RAG evaluation endpoints for measured metrics.')}`}
 }catch(e){html+=notice(e.message)}html+='</div>';$('mainTitle').textContent=title;$('mainBody').innerHTML=html;setVisible('insightsPanel',false);setVisible('rightbar',false);wireView(view)}
 function setView(v){document.body.classList.toggle('ci-ask-workspace',v==='ask');document.body.classList.toggle('ci-other-workspace',v!=='ask');document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('active',b.dataset.view===v))}
@@ -677,7 +745,7 @@ function wireView(v){const bind=(id,fn)=>{if($(id))$(id).onclick=async()=>{if(!r
  const mode=$('impactMode'),field=$('impactAttribute');
  mode.onchange=()=>{field.placeholder=mode.value==='jira'?'JIRA key, e.g. CAS-10':mode.value==='requirement'?'Describe the new business requirement':'Attribute, e.g. countryCode';field.value=''};
  bind('impactSearch',async()=>{const value=field.value.trim();if(!value)return toast('Enter a JIRA, requirement or attribute');$('impactResults').innerHTML=notice('Searching indexed requirements, historical JIRAs and mapping evidence…');const r=await api('/api/requirement-impact/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:mode.value,value,project:state.project||null})});state.result=r;const target=$('impactResults');target.innerHTML=renderRequirementImpact(r);const qaButton=$('lookupImpactQa');if(qaButton)qaButton.onclick=()=>lookupImpactQa(r);retrieveImpactGit(r,mode.value,value,state.project,target);});
- }if(v==='releases'){if(state.project)$('releaseProject').value=state.project;bind('releaseSearch',async()=>resultAt('releaseResults',await api(`/api/sdlc/releases/${encodeURIComponent($('releaseKey').value)}/report?`+new URLSearchParams({project_path:state.project}))));bind('releaseCompare',async()=>resultAt('compareResults',await api(`/api/sdlc/releases/${encodeURIComponent($('releaseKey').value)}/compare?`+new URLSearchParams({project_path:state.project,from_version:$('fromVersion').value,to_version:$('toVersion').value})) ))}if(v==='tests')bind('testSearch',async()=>{const d=await api('/api/knowledge-agent/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:$('testQuery').value})});$('testResults').innerHTML=testRecords(d).length?testEvidenceHtml(d):`<div class="ev-readable">${esc(textAnswer(d))}</div>`})}
+ }if(v==='releases'){let previewSha='';bind('snapshotPreview',async()=>{const key=$('releaseKey').value.trim();const d=await api('/api/release-snapshots/'+encodeURIComponent(key)+'/preview');previewSha=d.manifest?.git?.commit_sha||'';resultAt('snapshotResult',d)});bind('snapshotFinalize',async()=>{const key=$('releaseKey').value.trim(),by=$('snapshotOwner').value.trim();if(!by)throw Error('Enter finalized by');if(!previewSha)throw Error('Preview the snapshot first');if(!confirm('Finalize immutable release '+key+'? This cannot be overwritten.'))return;const d=await api('/api/release-snapshots/finalize',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({release_key:key,finalized_by:by,expected_git_sha:previewSha})});resultAt('snapshotResult',d)});if(state.project)$('releaseProject').value=state.project;bind('releaseSearch',async()=>resultAt('releaseResults',await api(`/api/sdlc/releases/${encodeURIComponent($('releaseKey').value)}/report?`+new URLSearchParams({project_path:state.project}))));bind('releaseCompare',async()=>resultAt('compareResults',await api(`/api/sdlc/releases/${encodeURIComponent($('releaseKey').value)}/compare?`+new URLSearchParams({project_path:state.project,from_version:$('fromVersion').value,to_version:$('toVersion').value})) ))}if(v==='tests'){wireBaselineCapture();bind('testSearch',async()=>{const d=await api('/api/knowledge-agent/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:$('testQuery').value})});$('testResults').innerHTML=testRecords(d).length?testEvidenceHtml(d):`<div class="ev-readable">${esc(textAnswer(d))}</div>`})}}
 async function projects(){
  const select=$('projectSelect');
  try{

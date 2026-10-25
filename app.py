@@ -34,7 +34,7 @@ def config():
 @app.api_route('/ui/api/{path:path}', methods=['GET','POST'])
 async def gateway(path: str, request: Request):
     route = '/' + path
-    if route not in ALLOWED and not (route.startswith('/api/sdlc/releases/') and (route.endswith('/report') or route.endswith('/compare'))):
+    if route not in ALLOWED and not (route.startswith('/api/release-snapshots/') and ((request.method == 'GET' and (route.endswith('/preview') or len(route.split('/')) == 4)) or (request.method == 'POST' and route == '/api/release-snapshots/finalize'))) and not (route.startswith('/api/scenario-baselines/latest/') and request.method == 'GET' and route.rsplit('/',1)[-1].isdigit()) and not (route.startswith('/api/scenario-baselines/capture/') and request.method == 'POST' and route.rsplit('/',1)[-1].isdigit()) and not (route.startswith('/api/sdlc/releases/') and (route.endswith('/report') or route.endswith('/compare'))):
         raise HTTPException(404, 'Route is not exposed by the UI gateway')
     params = dict(request.query_params)
     data = await request.body() if request.method == 'POST' else None

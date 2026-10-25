@@ -78,3 +78,11 @@ body.ci-other-workspace .workspace{width:100%;min-width:0}
 .ci-focus-button:hover{border-color:#79b8e9}
 .ci-impact-panel>h3{font-size:17px;color:#edf7ff;margin:0 0 14px}
 .ci-impact-panel>h4{font-size:13px;color:#c9e3f9;margin:20px 0 8px}
+
+/* Explicit main baseline capture */
+.ci-baseline-panel{border:1px solid var(--border,#ccd7e5);border-radius:12px;padding:18px;margin-bottom:22px}
+.ci-baseline-panel label{display:block;font-weight:600;margin:10px 0}
+.ci-baseline-panel input,.ci-baseline-panel textarea{display:block;width:100%;box-sizing:border-box;margin-top:6px;padding:9px;border-radius:7px;border:1px solid #b8c6d6;background:var(--panel,#fff);color:inherit}
+.ci-baseline-fields{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.ci-baseline-actions{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0}
+@media(max-width:650px){.ci-baseline-fields{grid-template-columns:1fr}}
