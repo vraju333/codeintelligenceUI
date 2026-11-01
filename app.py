@@ -52,24 +52,22 @@ async def gateway(path: str, request: Request):
 
 @app.get('/ui/agent/events')
 async def events(query: str, project_path: str = "", project: str = ""):
-    """AG-UI-inspired event adapter; does not claim to be official AG-UI protocol."""
-    if not query.strip():
-        raise HTTPException(400, 'Query is required')
-    if not (project_path or project).strip():
-        raise HTTPException(400, 'Select an indexed project before using ASK')
+    """Forward backend investigation events without fabricating tool progress."""
+    selected = (project_path or project).strip()
+    if not query.strip() or not selected:
+        raise HTTPException(400, 'Query and selected indexed project are required')
+
     async def stream():
-        def event(name, value):
-            return 'event: ' + name + '\ndata: ' + json.dumps(value, ensure_ascii=False) + '\n\n'
-        yield event('RUN_STARTED', {'message':'Starting CodeIntelligence analysis'})
-        yield event('STEP_STARTED', {'step':'Retrieving verified engineering evidence'})
         try:
-            async with httpx.AsyncClient(timeout=120) as client:
-                response = await client.post(BACKEND + '/api/knowledge-agent/ask', json={'query':query, 'project_path':project_path or project or None})
-                response.raise_for_status()
-                result = response.json()
-            yield event('STEP_FINISHED', {'step':'Retrieving verified engineering evidence'})
-            yield event('STATE_SNAPSHOT', {'result':result})
-            yield event('RUN_FINISHED', {'status':'completed'})
+            async with httpx.AsyncClient(timeout=httpx.Timeout(180, connect=10)) as client:
+                async with client.stream('POST', BACKEND + '/api/investigations/events',
+                                         json={'query': query, 'project_path': selected}) as response:
+                    response.raise_for_status()
+                    async for chunk in response.aiter_bytes():
+                        yield chunk
         except Exception as exc:
-            yield event('RUN_ERROR', {'message':str(exc)[:500]})
-    return StreamingResponse(stream(), media_type='text/event-stream', headers={'Cache-Control':'no-cache','X-Accel-Buffering':'no'})
+            message = f'{type(exc).__name__}: investigation stream unavailable'
+            yield 'event: RUN_ERROR\ndata: ' + json.dumps({'message': message}) + '\n\n'
+
+    return StreamingResponse(stream(), media_type='text/event-stream',
+                             headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})

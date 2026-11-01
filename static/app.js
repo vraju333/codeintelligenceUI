@@ -1,5 +1,5 @@
 'use strict';
-const $=id=>document.getElementById(id);const state={result:null,question:'',tab:'overview',view:'ask',project:'',recent:[]};
+const $=id=>document.getElementById(id);const state={result:null,investigation:null,question:'',tab:'overview',view:'ask',project:'',recent:[]};
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt=x=>typeof x==='string'?x:JSON.stringify(x,null,2);
 const item=(title,body)=>`<div class="item"><strong>${esc(title)}</strong><small>${esc(body)}</small></div>`;
@@ -35,7 +35,7 @@ function updateProjectGate(){
  ['run','question','followup'].forEach(id=>{const el=$(id);if(el)el.disabled=!ready});
 }
 function changeProject(path){if(impactGitStream){impactGitStream.close();impactGitStream=null;}
- state.project=path;state.result=null;state.question='';state.impactFocusOverride=null;state.tab='overview';
+ state.project=path;state.result=null;state.investigation=null;state.question='';state.impactFocusOverride=null;state.tab='overview';
  $('question').value='';$('mainBody').innerHTML=notice(path?'Project changed. Run a new analysis for the selected project.':'Select a project to begin.');
  $('runState').textContent=path?'Ready':'Project required';
  $('run').disabled=!path;
@@ -89,6 +89,15 @@ function jiraCardsFromAnswer(answer){
 // Normalize QA evidence without treating suggestions or empty objects as executed tests.
 function testRecords(r){
  const out=[];
+ const requestedAttribute=String(r?.attribute||'').trim();
+ const normAttr=v=>String(v||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+ const matchesAttribute=t=>{
+  if(!requestedAttribute)return true;
+  const declared=String(t.attribute||'').trim();
+  if(declared)return normAttr(declared)===normAttr(requestedAttribute);
+  const text=[t.scenario,t.expected].filter(Boolean).join(' ');
+  return new RegExp('(^|[^a-z0-9])'+requestedAttribute.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'(?=$|[^a-z0-9])','i').test(text);
+ };
  const sources=[r, r?.engineering_evidence].filter(x=>x&&typeof x==='object');
  const keys=['test_evidence','test_documents','test_baselines','jira_test_baselines','qa_documents','test_cases','test_suites','qa','test_cases'];
  const add=(kind,value,name='')=>{
@@ -102,7 +111,7 @@ function testRecords(r){
    }
    if(value.count===0||value.unique_count===0)return;
    const recordFields=['test_id','test_case_id','scenario_code','document_id','filename','source_ref','jira','name','title','test_name','test_case','scenario','description','baseline_version','release_key'];
-   if(recordFields.some(k=>value[k]!==undefined)){out.push({kind,name,value});return;}
+   if(recordFields.some(k=>value[k]!==undefined)){if(matchesAttribute(value))out.push({kind,name,value});return;}
    Object.entries(value).forEach(([key,v])=>{
     if(['count','unique_count','status','project_path','execution_verified','note','total','limit'].includes(key))return;
     add(kind,v,key);
@@ -252,7 +261,9 @@ function requirementImpactHighlights(r){
  const methods=array(r.java_evidence?.methods),fields=array(r.java_evidence?.fields);
  const gaps=array(r.operation_evidence?.mapping_source_gaps);
  const recommendations=array(r.regression_recommendations);
- if(!ops.length&&!methods.length&&!gaps.length)return '';
+ if(!ops.length&&!methods.length&&!gaps.length&&sourceStatus==='SCANNED')return ''; 
+ const sourceStatus=String(r.java_evidence?.status||'NOT_CHECKED');
+ const sourceWarning=sourceStatus!=='SCANNED'?`<div class="ci-impact-panel ci-gap-panel"><h4>Source analysis unavailable</h4><p class="ev-muted">${esc(sourceStatus)} — Java source was not scanned. Zero source counts do not mean no impact. Confirm the selected project's local source path is accessible to the backend.</p></div>`:'';
  const metrics=`<div class="ci-impact-metrics"><div><b>${ops.length||array(r.affected_operations).length}</b><span>REST operations</span></div><div><b>${methods.length}</b><span>Java method mentions</span></div><div><b>${paths}</b><span>Candidate call paths</span></div><div><b>${gaps.length}</b><span>Mapping gaps</span></div><div><b>${recommendations.length}</b><span>Suggested tests</span></div></div>`;
  const operation=(o)=>{
   const role=array(o.requirement_roles).join(' + ')||'REVIEW';
@@ -262,6 +273,7 @@ function requirementImpactHighlights(r){
   return `<details class="ci-impact-operation"><summary><span class="ci-priority ci-priority-${esc(priority)}">${esc(o.change_review_priority||'REVIEW')}</span><strong>${esc(o.http_method||'HTTP')} ${esc(o.endpoint||'')}</strong><span class="ci-op-role">${esc(role)}</span><small>${chains.length} paths</small></summary><div class="ci-operation-body"><p>${esc(o.role_reason||o.reason||'Requires review')}</p><p class="ev-muted">${esc(o.role_evidence_note||'Role inferred from requirement')}</p>${body}</div></details>`;
  };
  let html=`<section class="ci-impact-highlights"><h3>Pre-development impact overview</h3><p class="ev-muted">Review priorities are inferred; candidate source paths are not verified execution traces.</p>${metrics}`;
+ html+=sourceWarning;
  if(ops.length)html+=`<div class="ci-impact-panel"><h4>Prioritized REST operations</h4>${primary.map(operation).join('')}${secondary.length?`<details class="ci-conditional"><summary>Conditional / regression operations (${secondary.length})</summary>${secondary.map(operation).join('')}</details>`:''}</div>`;
  if(gaps.length)html+=`<div class="ci-impact-panel ci-gap-panel"><h4>Mapping-to-source gaps</h4>${gaps.map(g=>evidenceLine(g.attribute||'Attribute',g.classification||'',g.note||'')).join('')}</div>`;
  if(methods.length){
@@ -465,6 +477,11 @@ function executionSummary(r){
 function bindImpactFocusButtons(){
  $('mainBody').querySelectorAll('[data-impact-focus]').forEach(button=>button.addEventListener('click',()=>{state.impactFocusOverride=button.dataset.impactFocus;renderAnswer(state.result)}));
 }
+function investigationPanels(){
+ const inv=state.investigation;
+ if(!inv||!Array.isArray(inv.evidence)||!inv.evidence.length)return '';
+ return `<section class="section"><h3>Investigation evidence</h3><p class="muted">Source-backed and candidate evidence are displayed separately; missing test records do not establish missing coverage.</p>${inv.evidence.map(panel=>`<details class="item"><summary><strong>${esc(panel.title)}</strong> · ${esc(panel.classification)}${panel.count===undefined?'':' · '+panel.count}</summary><pre class="evidence">${esc(fmt(panel.items))}</pre></details>`).join('')}${(inv.warnings||[]).map(w=>`<p class="muted">${esc(w)}</p>`).join('')}</section>`;
+}
 function renderAnswer(r){
  state.result=r;
  const mapping=resultKind(r)==='mapping';
@@ -481,7 +498,7 @@ function renderAnswer(r){
  metrics.forEach(([id,value,visible])=>{const el=$(id);el.textContent=visible?String(value):'—';el.closest('.metric').hidden=!visible});
  setVisible('metrics',metrics.some(x=>x[2]));
  $('mainTitle').textContent=mapping?'Mapping evidence':hasCode?'Engineering evidence':'ASK result';
- $('mainBody').innerHTML=attributeEvidenceBanner(r)+renderAskEvidence(r);
+ $('mainBody').innerHTML=attributeEvidenceBanner(r)+renderAskEvidence(r)+investigationPanels();
  bindImpactFocusButtons();
  if(state.view==='ask' && r?.source!=='MAPPING_DOCUMENT_EVIDENCE')enrichAskJiraSubjects(r);
  $('insights').innerHTML=mapping?item('Evidence source',`${docs.length} imported mapping document(s) · ${rows.length} row(s)`)+(r.note?item('Evidence boundary',r.note):''):item('Evidence source',r.source||r.status||'ASK result')+(r.note?item('Evidence boundary',r.note):'');
@@ -587,7 +604,7 @@ async function runStructuredImpact(target,query){
 function run(){if(!requireProject())return;state.impactFocusOverride=null;const query=$('question').value.trim();if(!query)return toast('Enter a question');state.question=query;state.view='ask';setView('ask');const impactTarget=askImpactTarget(query);// JIRA ASK must use the comprehensive knowledge-agent endpoint; do not bypass it.
  // Project path is passed to the event gateway below.
  if(impactTarget){runStructuredImpact(impactTarget,query);return;}$('run').disabled=true;$('runState').textContent='Running';setSteps([['running','Retrieving verified engineering evidence…']]);$('mainBody').innerHTML='<div class="empty">Waiting for backend response…</div>';const source=new EventSource('/ui/agent/events?'+new URLSearchParams({query,project_path:state.project,project:state.project}).toString());let finished=false;
-source.addEventListener('RUN_STARTED',()=>setSteps([['running','Starting agent run…']]));source.addEventListener('STEP_STARTED',e=>setSteps([['done','Query accepted'],['running',JSON.parse(e.data).step]]));source.addEventListener('STEP_FINISHED',e=>setSteps([['done','Query accepted'],['done',JSON.parse(e.data).step]]));source.addEventListener('STATE_SNAPSHOT',e=>{renderAnswer(JSON.parse(e.data).result);saveRecent(query)});source.addEventListener('RUN_FINISHED',()=>{finished=true;source.close();$('run').disabled=false;$('runState').textContent='Completed';setSteps(state.result?executionSummary(state.result):[['done','Backend completed']])});source.addEventListener('RUN_ERROR',e=>{finished=true;source.close();$('run').disabled=false;$('runState').textContent='Failed';const m=JSON.parse(e.data).message;$('mainBody').innerHTML=notice(m);setSteps([['done','Query accepted'],['error','Backend request failed']])});source.onerror=()=>{if(!finished){source.close();$('run').disabled=false;$('runState').textContent='Disconnected';$('mainBody').innerHTML=notice('Could not reach the ASK stream. Check backend and UI server.')}}}
+source.addEventListener('RUN_STARTED',()=>setSteps([['running','Starting agent run…']]));source.addEventListener('STEP_STARTED',e=>setSteps([['done','Query accepted'],['running',JSON.parse(e.data).step]]));source.addEventListener('STEP_FINISHED',e=>setSteps([['done','Query accepted'],['done',JSON.parse(e.data).step]]));source.addEventListener('STATE_SNAPSHOT',e=>{const snapshot=JSON.parse(e.data);state.investigation=snapshot.investigation||null;renderAnswer(snapshot.result);saveRecent(query)});source.addEventListener('TOOL_EVIDENCE',e=>{const panel=JSON.parse(e.data).panel;setSteps([['done','Query accepted'],['running','Received '+(panel?.title||'tool evidence')]])});source.addEventListener('RUN_FINISHED',()=>{finished=true;source.close();$('run').disabled=false;$('runState').textContent='Completed';setSteps(state.result?executionSummary(state.result):[['done','Backend completed']])});source.addEventListener('RUN_ERROR',e=>{finished=true;source.close();$('run').disabled=false;$('runState').textContent='Failed';const m=JSON.parse(e.data).message;$('mainBody').innerHTML=notice(m);setSteps([['done','Query accepted'],['error','Backend request failed']])});source.onerror=()=>{if(!finished){source.close();$('run').disabled=false;$('runState').textContent='Disconnected';$('mainBody').innerHTML=notice('Could not reach the ASK stream. Check backend and UI server.')}}}
 function saveRecent(q){const norm=x=>x.toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();state.recent=[q,...state.recent.filter(x=>norm(x)!==norm(q))].slice(0,8);try{localStorage.setItem('ci_recent',JSON.stringify(state.recent))}catch{}renderRecent()}
 function renderRecent(){$('recent').innerHTML=state.recent.map(q=>`<button title="${esc(q)}" data-recent="${esc(q)}">◈ ${esc(q)}</button>`).join('')||'<div class="muted">No recent analyses</div>';document.querySelectorAll('[data-recent]').forEach(b=>b.onclick=()=>{if(!requireProject())return;$('question').value=b.dataset.recent;run()});updateProjectGate()}
 function showTab(tab){if(!requireProject())return;state.tab=tab;document.querySelectorAll('[data-tab]').forEach(b=>b.classList.toggle('selected',b.dataset.tab===tab));if(tab==='overview'){renderAnswer(state.result||{answer:'No analysis yet.'});return}const r=state.result||{};let html='';if(tab==='graph'){const paths=Object.values(r.commit_call_paths||{});html=paths.length?`<div class="graph-flow">${paths.map(p=>`<div class="code-node">${esc(fmt(p).slice(0,1800))}</div>`).join('')}</div>`:notice('No structured call graph returned by ASK. Use Impact Analysis to query verified graph services.')}else if(tab==='code')html=content(r);else if(tab==='mappings')html=r.source==='MAPPING_DOCUMENT_EVIDENCE'?mappingContent(r):notice('No mapping rows in this result.');else if(tab==='qa')html=Object.keys(r.test_suites||{}).length?`<div class="evidence">${esc(fmt(r.test_suites))}</div>`:notice('No QA payload in this answer. Ask for CAS-2 test cases.');else if(tab==='jira')html=Object.keys(r.git_commit_evidence||{}).length?`<div class="evidence">${esc(fmt(r.git_commit_evidence))}</div>`:notice('Use the JIRA navigation to search indexed requirements.');else html=notice(`Use the ${tab} workspace to load its live data.`);$('mainTitle').textContent=tab.toUpperCase()+' evidence';$('mainBody').innerHTML=html}
