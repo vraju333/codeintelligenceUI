@@ -11,9 +11,9 @@ from fastapi.staticfiles import StaticFiles
 ROOT = Path(__file__).resolve().parent
 BACKEND = os.getenv('CI_BACKEND_URL', 'http://127.0.0.1:8081').rstrip('/')
 ALLOWED = {
- '/health', '/api/projects', '/api/jira-knowledge', '/api/jira-knowledge/search',
- '/api/knowledge-agent/ask', '/api/test-suites/search', '/api/knowledge-base/documents', '/api/knowledge-base/search',
- '/api/knowledge-sync/status', '/api/knowledge-sync/runs', '/api/knowledge-sync/sync-all',
+ '/health', '/api/projects', '/api/projects/register', '/api/projects/import-git', '/api/jira-knowledge', '/api/jira-knowledge/search',
+ '/api/knowledge-agent/ask', '/api/test-suites/search', '/api/test-suites/documents', '/api/knowledge-base/documents', '/api/knowledge-base/search',
+ '/api/knowledge-sync/status', '/api/knowledge-sync/runs', '/api/knowledge-sync/sync-all', '/api/knowledge-sync/sources',
  '/api/mapping-intelligence/documents', '/api/mapping-intelligence/search',
  '/api/mapping-intelligence/lineage', '/api/mapping-intelligence/graph-lineage',
  '/api/scenarios/active-project', '/api/scenario-baselines/overview',
@@ -31,13 +31,13 @@ def home():
 def config():
     return {'mode':'LIVE', 'backend_configured':bool(BACKEND), 'ag_ui':'event-adapter', 'backend_target':'configured'}
 
-@app.api_route('/ui/api/{path:path}', methods=['GET','POST'])
+@app.api_route('/ui/api/{path:path}', methods=['GET','POST','PATCH'])
 async def gateway(path: str, request: Request):
     route = '/' + path
-    if route not in ALLOWED and not (route.startswith('/api/release-snapshots/') and ((request.method == 'GET' and (route.endswith('/preview') or len(route.split('/')) == 4)) or (request.method == 'POST' and route == '/api/release-snapshots/finalize'))) and not (route.startswith('/api/scenario-baselines/latest/') and request.method == 'GET' and route.rsplit('/',1)[-1].isdigit()) and not (route.startswith('/api/scenario-baselines/capture/') and request.method == 'POST' and route.rsplit('/',1)[-1].isdigit()) and not (route.startswith('/api/sdlc/releases/') and (route.endswith('/report') or route.endswith('/compare'))):
+    if route not in ALLOWED and not (route.startswith('/api/knowledge-sync/sources/') and route.endswith('/disable') and request.method == 'POST' and route.split('/')[-2].isdigit()) and not (route.startswith('/api/knowledge-sync/sources/') and request.method == 'PATCH' and route.split('/')[-1].isdigit()) and not (route == '/api/knowledge-sync/connect' and request.method == 'POST') and not (route == '/api/knowledge-sync/jira/projects' and request.method == 'GET') and not (request.method == 'POST' and route.startswith('/api/knowledge-sync/sources/') and route.endswith('/sync') and route.split('/')[-2].isdigit()) and not (route.startswith('/api/release-snapshots/') and ((request.method == 'GET' and (route.endswith('/preview') or len(route.split('/')) == 4)) or (request.method == 'POST' and route == '/api/release-snapshots/finalize'))) and not (route.startswith('/api/scenario-baselines/latest/') and request.method == 'GET' and route.rsplit('/',1)[-1].isdigit()) and not (route.startswith('/api/scenario-baselines/capture/') and request.method == 'POST' and route.rsplit('/',1)[-1].isdigit()) and not (route.startswith('/api/sdlc/releases/') and (route.endswith('/report') or route.endswith('/compare'))):
         raise HTTPException(404, 'Route is not exposed by the UI gateway')
     params = dict(request.query_params)
-    data = await request.body() if request.method == 'POST' else None
+    data = await request.body() if request.method in ('POST','PATCH') else None
     try:
         async with httpx.AsyncClient(timeout=90) as client:
             resp = await client.request(request.method, BACKEND + route, params=params, content=data,
@@ -49,6 +49,14 @@ async def gateway(path: str, request: Request):
         raise HTTPException(502, f'Backend unavailable at configured CI_BACKEND_URL: {type(exc).__name__}') from exc
     except ValueError as exc:
         raise HTTPException(502, 'Backend returned non-JSON response') from exc
+
+# Public project endpoints on the UI origin (8090). Forward unchanged to the
+# existing backend project endpoints (8081). Other UI APIs keep /ui/api/*.
+@app.api_route('/api/projects', methods=['GET'])
+@app.api_route('/api/projects/register', methods=['POST'])
+@app.api_route('/api/projects/import-git', methods=['POST'])
+async def project_api_alias(request: Request):
+    return await gateway(request.url.path.lstrip('/'), request)
 
 @app.get('/ui/agent/events')
 async def events(query: str, project_path: str = "", project: str = ""):

@@ -1,13 +1,13 @@
 'use strict';
-const $=id=>document.getElementById(id);const state={result:null,investigation:null,question:'',tab:'overview',view:'ask',project:'',recent:[]};
+const $=id=>document.getElementById(id);let ciViewEpoch=0;const state={result:null,investigation:null,question:'',tab:'overview',view:'ask',project:'',recent:[]};
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt=x=>typeof x==='string'?x:JSON.stringify(x,null,2);
 const item=(title,body)=>`<div class="item"><strong>${esc(title)}</strong><small>${esc(body)}</small></div>`;
 const notice=s=>`<div class="notice">${esc(s)}</div>`;
 function toast(msg){$('toast').textContent=msg;$('toast').style.display='block';setTimeout(()=>$('toast').style.display='none',3500)}
-async function api(path,opts={}){if(!PROJECT_FREE_PATHS.has(path.split('?')[0])){if(!state.project)throw Error('Select an indexed project first.');path=projectApiPath(path);opts=projectBody(opts)}const res=await fetch('/ui/api'+path,opts);const data=await res.json().catch(()=>({}));if(!res.ok)throw Error(data.detail||`HTTP ${res.status}`);return data}
+async function api(path,opts={}){if(!PROJECT_FREE_PATHS.has(path.split('?')[0])){if(!state.project)throw Error('Select an indexed project first.');path=projectApiPath(path);opts=projectBody(opts)}const requestOptions={...opts};if(!requestOptions.method||String(requestOptions.method).toUpperCase()==='GET')requestOptions.cache='no-store';const res=await fetch('/ui/api'+path,requestOptions);const data=await res.json().catch(()=>({}));if(!res.ok)throw Error(data.detail||`HTTP ${res.status}`);return data}
 // A workspace project is required for every project-scoped operation.
-const PROJECT_FREE_PATHS=new Set(['/health','/api/projects','/api/storage/status']);
+const PROJECT_FREE_PATHS=new Set(['/health','/api/projects','/api/projects/register','/api/projects/import-git','/api/storage/status']);
 function requireProject(){
  if(state.project)return true;
  toast('Select an indexed project before continuing.');
@@ -18,7 +18,7 @@ function projectApiPath(path){
  const [pathname,query='']=path.split('?');
  if(PROJECT_FREE_PATHS.has(pathname))return path;
  const params=new URLSearchParams(query);
- params.set('project_path',state.project);
+ if(pathname!=='/api/mapping-intelligence/documents'||!params.has('project_path'))params.set('project_path',state.project);
  return pathname+'?'+params.toString();
 }
 function projectBody(opts){
@@ -33,15 +33,98 @@ function updateProjectGate(){
  const bar=$('ciProjectTop');if(bar){bar.classList.toggle('ci-ready',ready);$('ciProjectStatus').textContent=ready?'● Active':'● Required';}
  document.querySelectorAll('#nav button, #workspaceMenu, #newAnalysis, [data-open], [data-question], [data-recent], #followupSend, #export, #clearRecent').forEach(el=>{el.disabled=!ready});
  ['run','question','followup'].forEach(id=>{const el=$(id);if(el)el.disabled=!ready});
+ const syncBtn=$('syncProjectBtn');if(syncBtn)syncBtn.disabled=!ready||syncBtn.dataset.busy==='true';
 }
-function changeProject(path){if(impactGitStream){impactGitStream.close();impactGitStream=null;}
- state.project=path;state.result=null;state.investigation=null;state.question='';state.impactFocusOverride=null;state.tab='overview';
+function changeProject(path){ciViewEpoch++;if(ciLiveStream){ciLiveStream.close();ciLiveStream=null;}if(impactGitStream){impactGitStream.close();impactGitStream=null;}
+ ciLiveReset(path);state.project=path;state.result=null;state.investigation=null;state.question='';state.impactFocusOverride=null;state.tab='overview';
  $('question').value='';$('mainBody').innerHTML=notice(path?'Project changed. Run a new analysis for the selected project.':'Select a project to begin.');
  $('runState').textContent=path?'Ready':'Project required';
  $('run').disabled=!path;
  updateProjectGate();
  try{if(path)localStorage.setItem('ci_selected_project',path);else localStorage.removeItem('ci_selected_project')}catch(_e){}
  loadView(state.view);
+ ciWorkspaceState(path?'Ready for a new investigation':'Select a project','idle');
+}
+function normalizeProjectPath(path){return String(path||'').trim().replace(/\\/g,'/').replace(/\/+$/,'').toLowerCase()}
+// Mapping records belong to an indexed project root, never to a source folder.
+// Do not rewrite the selected workspace project for other API calls.
+async function mappingDocumentProjectPath(){
+ const selected=String(state.project||'').trim();
+ if(!selected)return selected;
+ const key=normalizeProjectPath(selected);
+ try{
+  const result=await api('/api/knowledge-sync/status');
+  const sources=Array.isArray(result?.sources)?result.sources:[];
+  const match=sources.find(source=>{
+   if(!source.project_path)return false;
+   const root=normalizeProjectPath(source.project_path);
+   const location=normalizeProjectPath(source.location);
+   return root===key || (location===key && key!==root && key.startsWith(root+'/'));
+  });
+  if(match)return String(match.project_path);
+ }catch(e){console.warn('Could not resolve mapping project from Knowledge Hub sources:',e)}
+ // Legacy workspace entries sometimes point to the docs folder itself.
+ // Only strip a recognized folder suffix, never an arbitrary path component.
+ if(/\/(docs|mappings)$/i.test(key))return selected.replace(/[\\/](docs|mappings)[\\/]*$/i,'');
+ return selected;
+}
+
+async function syncSelectedProject(){
+ if(!requireProject())return;
+ const selected=state.project, btn=$('syncProjectBtn'),status=$('syncProjectStatus');
+ btn.dataset.busy='true';btn.disabled=true;status.textContent='Checking sources…';ciWorkspaceState('Synchronizing project knowledge','running');
+ try{
+  const data=await api('/api/knowledge-sync/status');
+  const sources=Array.isArray(data.sources)?data.sources:[];
+  const eligible=sources.filter(x=>x.enabled===true&&normalizeProjectPath(x.project_path)===normalizeProjectPath(selected));
+  if(!eligible.length){status.textContent='No enabled sources for this project';ciWorkspaceState('No enabled sources for this project','warning');toast('Configure project-scoped sources in Knowledge Hub first.');return}
+  if(state.project!==selected){status.textContent='Project changed; sync cancelled';return}
+  let ok=0,skipped=0,changed=0;const errors=[];
+  for(const source of eligible){
+   if(state.project!==selected){status.textContent='Project changed; remaining sync cancelled';return}
+   status.textContent=`Syncing ${ok+errors.length+1}/${eligible.length}: ${source.name||source.source_type}`;
+   try{
+    const result=await api('/api/knowledge-sync/sources/'+encodeURIComponent(source.id)+'/sync',{method:'POST'});
+    if(result.status==='FAILED'||Number(result.failed||0)>0){errors.push((source.name||source.id)+': '+(result.error||'sync failed'));continue}
+    ok++;skipped+=Number(result.skipped||0);changed+=Number(result.created||0)+Number(result.updated||0);
+   }catch(e){errors.push((source.name||source.id)+': '+e.message)}
+  }
+  if(state.project!==selected){status.textContent='Sync finished for previous project';return}
+  status.textContent=errors.length?`Sync: ${ok}/${eligible.length} sources succeeded`:`✓ ${ok} sources synced · ${changed} changed · ${skipped} unchanged`;
+  if(errors.length)toast('Sync errors: '+errors.join('; '));
+  else toast('Project knowledge synchronized. Run ASK again to refresh evidence.');
+  // Never reuse stale investigation evidence after a sync.
+  ciViewEpoch++;state.result=null;state.investigation=null;state.impactFocusOverride=null;state.tab='overview';
+  if(state.view==='ask'){$('runState').textContent='Ready';$('question').value='';state.question='';}
+  ciLiveReset(selected);
+  await loadView(state.view);
+  // Always render a durable, nonempty workspace after sync; do not depend on a tab click.
+  if(state.view==='ask')restoreAskAfterSync(selected,ok,eligible.length,changed,skipped,errors);
+  else ciWorkspaceState(errors.length?'Sync completed with errors':'Project knowledge synchronized','done');
+
+ }catch(e){status.textContent='Sync failed';ciWorkspaceState('Sync failed: '+e.message,'error');toast(e.message)}
+ finally{btn.dataset.busy='false';updateProjectGate()}
+}
+// Persistent investigation workspace, visible even before the first agent event.
+function ciWorkspaceState(message,kind='idle'){
+ const panel=$('ciLive');if(!panel)return;
+ panel.hidden=false;
+ ciLiveStatus(message);
+ panel.dataset.status=kind;
+ const timeline=$('ciLiveTimeline');
+ if(timeline&&!timeline.children.length)ciLiveStep(message,kind==='error'?'error':kind==='done'?'done':'running');
+}
+function restoreAskAfterSync(project,ok,total,changed,skipped,errors){
+ if(state.project!==project||state.view!=='ask')return;
+ setView('ask');
+ state.result=null;state.investigation=null;state.tab='overview';
+ const msg=errors.length?`Sync completed with ${errors.length} source error(s).`:`Knowledge sync complete: ${ok}/${total} sources, ${changed} changed, ${skipped} unchanged.`;
+ // Render directly instead of treating the empty state as a backend answer.
+ $('mainTitle').textContent='Ready for a new investigation';
+ $('mainBody').innerHTML=`<div class="ci-sync-ready"><h3>Project knowledge synchronized</h3><p>${esc(msg)}</p><p>Selected project: <strong>${esc(project)}</strong></p><p>Ask a question above to investigate updated evidence. Previous results have been cleared.</p></div>`;
+ setVisible('metrics',false);setVisible('insightsPanel',false);setVisible('bottomGrid',false);setVisible('rightbar',false);
+ ciLiveStep('Knowledge sources synchronized','done');ciWorkspaceState(msg,errors.length?'warning':'done');
+ $('run').disabled=false;
 }
 function listOf(data){if(Array.isArray(data))return data;for(const k of ['results','items','projects','documents','sources','releases','scenarios','data'])if(Array.isArray(data?.[k]))return data[k];return []}
 function textAnswer(r){return r?.answer||r?.message||r?.summary||r?.response||JSON.stringify(r,null,2)}
@@ -254,6 +337,7 @@ function retrieveImpactGit(r,mode,value,project,container){
  stream.onerror=()=>finish('Git lookup unavailable. Other impact evidence is still shown.');
 }
 function requirementImpactHighlights(r){
+ if(isUnmatchedAttribute(r))return '';
  const review=r.operation_evidence?.role_review||{};
  const primary=array(review.priority_operations),secondary=array(review.conditional_or_other_operations);
  const ops=[...primary,...secondary];
@@ -261,8 +345,8 @@ function requirementImpactHighlights(r){
  const methods=array(r.java_evidence?.methods),fields=array(r.java_evidence?.fields);
  const gaps=array(r.operation_evidence?.mapping_source_gaps);
  const recommendations=array(r.regression_recommendations);
- if(!ops.length&&!methods.length&&!gaps.length&&sourceStatus==='SCANNED')return ''; 
  const sourceStatus=String(r.java_evidence?.status||'NOT_CHECKED');
+ if(!ops.length&&!methods.length&&!gaps.length&&sourceStatus==='SCANNED')return '';
  const sourceWarning=sourceStatus!=='SCANNED'?`<div class="ci-impact-panel ci-gap-panel"><h4>Source analysis unavailable</h4><p class="ev-muted">${esc(sourceStatus)} — Java source was not scanned. Zero source counts do not mean no impact. Confirm the selected project's local source path is accessible to the backend.</p></div>`:'';
  const metrics=`<div class="ci-impact-metrics"><div><b>${ops.length||array(r.affected_operations).length}</b><span>REST operations</span></div><div><b>${methods.length}</b><span>Java method mentions</span></div><div><b>${paths}</b><span>Candidate call paths</span></div><div><b>${gaps.length}</b><span>Mapping gaps</span></div><div><b>${recommendations.length}</b><span>Suggested tests</span></div></div>`;
  const operation=(o)=>{
@@ -327,10 +411,23 @@ function renderFocusedImpact(r,focus){
  return `<div class="ev-dashboard"><div class="ci-impact-panel"><h3>${esc(heading)}</h3>${content}</div><details class="ev-technical"><summary>Technical response and provenance</summary>${technicalDetails(r)}</details></div>`;
 }
 function renderAdaptiveImpact(r){
+ if(isUnmatchedAttribute(r))return unmatchedAttributeView(r);
  const focus=state.impactFocusOverride||impactFocus(state.question);
  return impactFocusToolbar(focus)+(focus==='all'?renderRequirementImpact(r):renderFocusedImpact(r,focus));
 }
+function isUnmatchedAttribute(r){
+ // Discovered controllers are not evidence of an attribute dependency.
+ return r?.mode==='attribute'&&r?.status==='NO_MATCH'&&
+  !array(r.java_evidence?.methods).length&&!array(r.java_evidence?.fields).length&&
+  !array(r.historical_jiras).length&&!array(r.mappings).length&&
+  !array(r.scenarios).length&&!array(r.operation_evidence?.potentially_related).length;
+}
+function unmatchedAttributeView(r){
+ const count=Number(r.java_evidence?.files_scanned||0);
+ return `<section class="ci-result ci-no-match" role="status"><div class="ci-result-head"><div><div class="ci-eyebrow">PROJECT-SCOPED ATTRIBUTE INVESTIGATION</div><h3>No matching attribute evidence found</h3></div><span class="ci-status ci-status-muted">NO_MATCH</span></div><p><strong>Attribute:</strong> ${esc(r.input||array(r.attributes)[0]||'Unknown')}</p><p><strong>Project:</strong> ${esc(r.project||state.project)}</p><p>${count?`Scanned ${count} Java source files. `:''}No matching methods, fields, JIRA requirements, mapping rows, or test cases were identified in the available evidence.</p><p class="ci-boundary">The project contains REST endpoints, but none has a source-backed path to this attribute. They are not classified as affected. No match within the analyzed scope does not prove the absence of every possible dependency.</p><details><summary>Discovered endpoints (not linked to this attribute) · ${array(r.operation_evidence?.other_discovered).length}</summary>${array(r.operation_evidence?.other_discovered).map(o=>`<div class="ev-line">${esc(o.http_method)} ${esc(o.endpoint)} · NO ATTRIBUTE PATH</div>`).join('')||notice('No endpoints discovered')}</details></section>`;
+}
 function renderRequirementImpact(r){
+ if(isUnmatchedAttribute(r))return unmatchedAttributeView(r);
  const jiras=array(r.historical_jiras),rows=array(r.mappings),scenarios=array(r.scenarios),conflicts=array(r.mapping_conflicts),recs=array(r.regression_recommendations);
  const code=array(r.code_impact?.candidates),verified=array(r.verified_code_changes),git=impactGitCommits(r),releases=array(r.releases);
  const current=r.jira?.jira_id? [{jira_id:r.jira.jira_id,summary:r.jira.summary,relationship:'CURRENT_REQUIREMENT'}]:[];
@@ -483,6 +580,16 @@ function investigationPanels(){
  return `<section class="section"><h3>Investigation evidence</h3><p class="muted">Source-backed and candidate evidence are displayed separately; missing test records do not establish missing coverage.</p>${inv.evidence.map(panel=>`<details class="item"><summary><strong>${esc(panel.title)}</strong> · ${esc(panel.classification)}${panel.count===undefined?'':' · '+panel.count}</summary><pre class="evidence">${esc(fmt(panel.items))}</pre></details>`).join('')}${(inv.warnings||[]).map(w=>`<p class="muted">${esc(w)}</p>`).join('')}</section>`;
 }
 function renderAnswer(r){
+ // Ownership-gate responses are terminal. Never derive evidence from the question text.
+ if(r?.source==='WORKSPACE_JIRA_OWNERSHIP_GATE' && (r.status==='NOT_FOUND'||r.status==='PROJECT_REQUIRED')){
+  state.result=r;
+  $('mainTitle').textContent='Workspace JIRA lookup';
+  $('mainBody').innerHTML=notice(r.answer||'No indexed JIRA evidence belongs to the selected workspace.')+technicalDetails(r);
+  setVisible('metrics',false);setVisible('insightsPanel',false);setVisible('rightbar',false);setVisible('bottomGrid',false);
+  document.querySelectorAll('#tabs [data-tab]').forEach(b=>{b.hidden=b.dataset.tab!=='overview';b.style.display=b.hidden?'none':''});
+  state.tab='overview';
+  return;
+ }
  state.result=r;
  const mapping=resultKind(r)==='mapping';
  const commits=Object.values(r.git_commit_evidence||{}).flatMap(v=>v?.commits||[]);
@@ -518,6 +625,7 @@ function renderAnswer(r){
  if(state.tab!=='overview')showTab(state.tab);
 }
 async function enrichAskJiraSubjects(result){
+ if(result?.source==='WORKSPACE_JIRA_OWNERSHIP_GATE' || result?.status==='PROJECT_REQUIRED')return;
  // The ASK payload often contains issue keys without subjects. Resolve exact keys
  // against indexed JIRA data, falling back to the indexed search endpoint.
  const engineering=result.engineering_evidence||{};
@@ -556,7 +664,7 @@ async function enrichAskJiraSubjects(result){
    accept(data);
   }catch(_err){}
  }
- if(state.result!==result||state.view!=='ask')return;
+ if(state.result!==result||state.view!=='ask'||result?.source==='WORKSPACE_JIRA_OWNERSHIP_GATE')return;
  result._jiraSummaries=summaries;
  if(state.tab==='overview'){ $('mainBody').innerHTML=renderAskEvidence(result); bindImpactFocusButtons(); }
 }
@@ -583,9 +691,58 @@ function askImpactTarget(query){
  for(const [pattern,value] of identifiers)if(pattern.test(q))return {mode:'attribute',value};
  return null;
 }
+// Phase 11: render existing backend investigation events as progressive, source-labeled UI.
+// This is an incremental AG-UI-style experience, not a claim of AG-UI protocol compliance.
+let ciLiveStream=null;
+let ciLiveProject='';
+const ciLiveEvents=[];
+const ciLivePanels=new Map();
+function ciLiveReset(project){
+ if(ciLiveStream){ciLiveStream.close();ciLiveStream=null;}
+ ciLiveProject=project||'';ciLiveEvents.length=0;ciLivePanels.clear();
+ const panel=$('ciLive');if(panel)panel.hidden=false;
+ const timeline=$('ciLiveTimeline');if(timeline)timeline.replaceChildren();
+ const evidence=$('ciLiveEvidence');if(evidence)evidence.replaceChildren();
+ ciLiveStatus(project?'Ready · '+project:'Select a project');
+}
+function ciLiveStep(label,kind='running'){
+ const panel=$('ciLive'),timeline=$('ciLiveTimeline');if(!panel||!timeline)return;
+ panel.hidden=false;
+ if(ciLiveEvents.length>=12){ciLiveEvents.shift();timeline.firstElementChild?.remove();}
+ // A streamed step may be emitted repeatedly as it starts and finishes.
+ const last=timeline.lastElementChild;
+ if(last && last.dataset.stepLabel===String(label||'Processing evidence')){
+  last.className='ci-live-step '+kind;
+  last.textContent=(kind==='done'?'✓ ':kind==='error'?'! ':'◌ ')+String(label||'Processing evidence');
+  return;
+ }
+ if(ciLiveEvents.includes(String(label||'Processing evidence')))return;
+ ciLiveEvents.push(String(label||'Processing evidence'));
+ const line=document.createElement('div');line.className='ci-live-step '+kind;
+ line.textContent=(kind==='done'?'✓ ':kind==='error'?'! ':'◌ ')+String(label||'Processing evidence');
+ line.dataset.stepLabel=String(label||'Processing evidence');
+ timeline.appendChild(line);
+}
+function ciLiveStatus(value){const el=$('ciLiveStatus');if(el)el.textContent=value;}
+function ciLiveEvidence(payload){
+ const panel=payload?.panel;if(!panel||typeof panel!=='object')return;
+ const key=String(panel.id||panel.key||panel.title||'Evidence');
+ ciLivePanels.set(key,panel);
+ const container=$('ciLiveEvidence');if(!container)return;
+ container.replaceChildren();
+ for(const p of [...ciLivePanels.values()].slice(-8)){
+  const card=document.createElement('details');card.className='ci-live-card';
+  const summary=document.createElement('summary');summary.textContent=String(p.title||'Evidence')+(p.count===undefined?'':' · '+p.count);
+  const detail=document.createElement('div');detail.className='ci-live-card-detail';
+  const classification=document.createElement('span');classification.className='ci-live-classification';classification.textContent=String(p.classification||'Candidate evidence');
+  const pre=document.createElement('pre');pre.textContent=JSON.stringify(p.items??p,null,2);
+  detail.append(classification,pre);card.append(summary,detail);container.append(card);
+ }
+}
+function ciLiveEvent(event,handler){try{handler(JSON.parse(event.data||'{}'))}catch(error){ciLiveStep('Could not parse a stream event','error')}}
 async function runStructuredImpact(target,query){
  const project=state.project;
- $('run').disabled=true;$('runState').textContent='Running';
+ ciLiveReset(state.project);ciLiveStatus('Running');ciLiveStep('Starting project-scoped investigation');$('run').disabled=true;$('runState').textContent='Running';
  setSteps([['running','Analyzing source and requirement evidence…']]);
  $('mainBody').innerHTML=notice('Analyzing impacted operations, JIRA, mappings and tests…');
  try{
@@ -593,9 +750,13 @@ async function runStructuredImpact(target,query){
   if(state.project!==project||state.view!=='ask'||state.question!==query)return;
   const result={...r,intent:'JIRA_IMPACT_ANALYSIS',source:'JIRA_REQUIREMENT_IMPACT'};
   renderAnswer(result);saveRecent(query);
+  ciLiveStep('Project-scoped impact analysis completed','done');
+  ciLiveEvidence({panel:{title:'Structured impact evidence',classification:'PROJECT_SCOPED_ANALYSIS',count:(result.operation_evidence?.potentially_related||[]).length,items:{status:result.status,attribute:result.input,project:result.project,source_backed_operations:(result.operation_evidence?.potentially_related||[]).map(o=>o.http_method+' '+o.endpoint),historical_jiras:(result.historical_jiras||[]).length,mappings:(result.mappings||[]).length,test_cases:(result.test_cases||[]).length}}});
+  ciLiveStatus('Completed');
   $('runState').textContent='Completed';
   setSteps([['done','Structured project-scoped impact analysis completed']]);
  }catch(error){
+  ciLiveStatus('Failed');ciLiveStep('Impact analysis failed','error');
   $('runState').textContent='Failed';
   $('mainBody').innerHTML=notice('Impact analysis failed: '+(error.message||error));
   setSteps([['error','Structured impact request failed']]);
@@ -603,8 +764,8 @@ async function runStructuredImpact(target,query){
 }
 function run(){if(!requireProject())return;state.impactFocusOverride=null;const query=$('question').value.trim();if(!query)return toast('Enter a question');state.question=query;state.view='ask';setView('ask');const impactTarget=askImpactTarget(query);// JIRA ASK must use the comprehensive knowledge-agent endpoint; do not bypass it.
  // Project path is passed to the event gateway below.
- if(impactTarget){runStructuredImpact(impactTarget,query);return;}$('run').disabled=true;$('runState').textContent='Running';setSteps([['running','Retrieving verified engineering evidence…']]);$('mainBody').innerHTML='<div class="empty">Waiting for backend response…</div>';const source=new EventSource('/ui/agent/events?'+new URLSearchParams({query,project_path:state.project,project:state.project}).toString());let finished=false;
-source.addEventListener('RUN_STARTED',()=>setSteps([['running','Starting agent run…']]));source.addEventListener('STEP_STARTED',e=>setSteps([['done','Query accepted'],['running',JSON.parse(e.data).step]]));source.addEventListener('STEP_FINISHED',e=>setSteps([['done','Query accepted'],['done',JSON.parse(e.data).step]]));source.addEventListener('STATE_SNAPSHOT',e=>{const snapshot=JSON.parse(e.data);state.investigation=snapshot.investigation||null;renderAnswer(snapshot.result);saveRecent(query)});source.addEventListener('TOOL_EVIDENCE',e=>{const panel=JSON.parse(e.data).panel;setSteps([['done','Query accepted'],['running','Received '+(panel?.title||'tool evidence')]])});source.addEventListener('RUN_FINISHED',()=>{finished=true;source.close();$('run').disabled=false;$('runState').textContent='Completed';setSteps(state.result?executionSummary(state.result):[['done','Backend completed']])});source.addEventListener('RUN_ERROR',e=>{finished=true;source.close();$('run').disabled=false;$('runState').textContent='Failed';const m=JSON.parse(e.data).message;$('mainBody').innerHTML=notice(m);setSteps([['done','Query accepted'],['error','Backend request failed']])});source.onerror=()=>{if(!finished){source.close();$('run').disabled=false;$('runState').textContent='Disconnected';$('mainBody').innerHTML=notice('Could not reach the ASK stream. Check backend and UI server.')}}}
+ if(impactTarget){runStructuredImpact(impactTarget,query);return;}$('run').disabled=true;$('runState').textContent='Running';setSteps([['running','Retrieving verified engineering evidence…']]);$('mainBody').innerHTML='<div class="empty">Waiting for backend response…</div>';const source=new EventSource('/ui/agent/events?'+new URLSearchParams({query,project_path:state.project,project:state.project}).toString());let finished=false;ciLiveStream=source;
+source.addEventListener('RUN_STARTED',()=>setSteps([['running','Starting agent run…']]));source.addEventListener('STEP_STARTED',e=>setSteps([['done','Query accepted'],['running',JSON.parse(e.data).step]]));source.addEventListener('STEP_STARTED',e=>ciLiveEvent(e,d=>ciLiveStep(d.step||'Agent step')));source.addEventListener('STEP_FINISHED',e=>setSteps([['done','Query accepted'],['done',JSON.parse(e.data).step]]));source.addEventListener('STEP_FINISHED',e=>ciLiveEvent(e,d=>ciLiveStep(d.step||'Step completed','done')));source.addEventListener('STATE_SNAPSHOT',e=>{const snapshot=JSON.parse(e.data);state.investigation=snapshot.investigation||null;renderAnswer(snapshot.result);saveRecent(query)});source.addEventListener('TOOL_EVIDENCE',e=>{const panel=JSON.parse(e.data).panel;setSteps([['done','Query accepted'],['running','Received '+(panel?.title||'tool evidence')]])});source.addEventListener('TOOL_EVIDENCE',e=>ciLiveEvent(e,d=>{ciLiveEvidence(d);ciLiveStatus('Evidence arriving')}));source.addEventListener('RUN_FINISHED',()=>{ciLiveStatus('Completed');ciLiveStep('Investigation completed','done');finished=true;source.close();if(ciLiveStream===source)ciLiveStream=null;$('run').disabled=false;$('runState').textContent='Completed';setSteps(state.result?executionSummary(state.result):[['done','Backend completed']])});source.addEventListener('RUN_ERROR',e=>{ciLiveStatus('Failed');ciLiveStep('Investigation failed','error');finished=true;source.close();if(ciLiveStream===source)ciLiveStream=null;$('run').disabled=false;$('runState').textContent='Failed';const m=JSON.parse(e.data).message;$('mainBody').innerHTML=notice(m);setSteps([['done','Query accepted'],['error','Backend request failed']])});source.onerror=()=>{if(!finished){ciLiveStatus('Disconnected');ciLiveStep('Stream disconnected','error');source.close();if(ciLiveStream===source)ciLiveStream=null;$('run').disabled=false;$('runState').textContent='Disconnected';$('mainBody').innerHTML=notice('Could not reach the ASK stream. Check backend and UI server.')}}}
 function saveRecent(q){const norm=x=>x.toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();state.recent=[q,...state.recent.filter(x=>norm(x)!==norm(q))].slice(0,8);try{localStorage.setItem('ci_recent',JSON.stringify(state.recent))}catch{}renderRecent()}
 function renderRecent(){$('recent').innerHTML=state.recent.map(q=>`<button title="${esc(q)}" data-recent="${esc(q)}">◈ ${esc(q)}</button>`).join('')||'<div class="muted">No recent analyses</div>';document.querySelectorAll('[data-recent]').forEach(b=>b.onclick=()=>{if(!requireProject())return;$('question').value=b.dataset.recent;run()});updateProjectGate()}
 function showTab(tab){if(!requireProject())return;state.tab=tab;document.querySelectorAll('[data-tab]').forEach(b=>b.classList.toggle('selected',b.dataset.tab===tab));if(tab==='overview'){renderAnswer(state.result||{answer:'No analysis yet.'});return}const r=state.result||{};let html='';if(tab==='graph'){const paths=Object.values(r.commit_call_paths||{});html=paths.length?`<div class="graph-flow">${paths.map(p=>`<div class="code-node">${esc(fmt(p).slice(0,1800))}</div>`).join('')}</div>`:notice('No structured call graph returned by ASK. Use Impact Analysis to query verified graph services.')}else if(tab==='code')html=content(r);else if(tab==='mappings')html=r.source==='MAPPING_DOCUMENT_EVIDENCE'?mappingContent(r):notice('No mapping rows in this result.');else if(tab==='qa')html=Object.keys(r.test_suites||{}).length?`<div class="evidence">${esc(fmt(r.test_suites))}</div>`:notice('No QA payload in this answer. Ask for CAS-2 test cases.');else if(tab==='jira')html=Object.keys(r.git_commit_evidence||{}).length?`<div class="evidence">${esc(fmt(r.git_commit_evidence))}</div>`:notice('Use the JIRA navigation to search indexed requirements.');else html=notice(`Use the ${tab} workspace to load its live data.`);$('mainTitle').textContent=tab.toUpperCase()+' evidence';$('mainBody').innerHTML=html}
@@ -619,6 +780,27 @@ function hubRows(payload, keys=[]){
   }
  }
  return [];
+}
+// Accept document collections from either the mapping registry or indexed Knowledge Hub.
+// Never count a connected folder itself as an imported document.
+function hubMappingDocuments(payload){
+ const rows=[];const visited=new Set();
+ const walk=(value,depth=0)=>{
+  if(depth>6||!value||typeof value!=='object'||visited.has(value))return;
+  visited.add(value);
+  if(Array.isArray(value)){value.forEach(x=>walk(x,depth+1));return;}
+  const documentLike=Boolean(value.document_id||value.filename||value.document_name||value.source_ref||value.file_path||value.path||value.title);
+  const mappingRow=Boolean(value.source_path&&value.target_attribute);
+  if(documentLike&&!mappingRow){rows.push(value);return;}
+  for(const key of ['documents','mapping_documents','files','results','items','records','data','mappings'])if(value[key])walk(value[key],depth+1);
+ };
+ walk(payload);
+ return rows;
+}
+function hubMappingDiagnostics(payload,rawCount,projectCount,indexedCount){
+ if(projectCount)return '';
+ const shape=payload&&typeof payload==='object'?Object.keys(payload).slice(0,12).join(', '):'empty response';
+ return `<div class="hub-warning"><strong>Mapping document diagnostic</strong><div>Mapping API records: ${rawCount}; matching project: ${projectCount}; indexed mapping documents: ${indexedCount}.</div><div>Response fields: ${esc(shape)}.</div><div>If the mapping source is SUCCESS but both document APIs return no imported documents, check the mapping ingestion/import step in the backend. A successful source sync alone does not establish that documents were imported.</div></div>`;
 }
 function hubDocIdentity(row){
  const value=row.source_ref||row.path||row.file_path||row.filepath||row.url||row.source_url||row.filename||row.title||row.name||row.document_id||row.id||'';
@@ -663,27 +845,77 @@ function hubTestDoc(d){
  const text=[d.source_type,d.document_type,d.category,d.kind,d.title,d.name,d.filename,d.document_name,d.source_ref,d.path].join(' ').toLowerCase();
  return /test|qa|suite|execution/i.test(text);
 }
+async function hubManagePanel(){
+ const data=await api('/api/knowledge-sync/status');
+ const rows=(data.sources||[]).filter(x=>normalizeProjectPath(x.project_path)===normalizeProjectPath(state.project));
+ const row=x=>`<div class="item"><strong>${esc(x.name)}</strong> <small>${esc(x.source_type)} · ${x.enabled?'Enabled':'Disabled'} · ${esc(x.last_status||'Never synced')}</small><small>${esc(x.location||'')} · ${esc(x.last_sync_at||'No sync yet')}</small>${x.last_error?`<small>${esc(x.last_error)}</small>`:''}<div class="field"><button data-hub-sync="${Number(x.id)}">Sync now</button><button data-hub-toggle="${Number(x.id)}" data-hub-enabled="${x.enabled?'1':'0'}">${x.enabled?'Disable':'Enable'}</button></div></div>`;
+ return `<section class="ci-baseline-panel"><h3>Connected knowledge sources</h3><p class="ci-sub">Selected code project: ${esc(state.project)} · Automatic synchronization: ${data.auto_sync_enabled?'Enabled':'Disabled'} · Interval: ${Number(data.interval_seconds)||0} seconds. Unchanged content is skipped by the existing incremental sync engine.</p>${rows.map(row).join('')||notice('No sources registered for this project.')}<details id="hubNewConnection"><summary>+ Add New Connection</summary><div class="field"><input id="hubSourceName" placeholder="Source name"><select id="hubSourceType"><option value="JIRA">JIRA</option><option value="DOCUMENT_FOLDER">Document folder</option><option value="MAPPING_FOLDER">Mapping folder</option><option value="TEST_SUITE_FOLDER">Test suite folder</option></select></div><div class="field"><input id="hubSourceLocation" placeholder="Folder path (for folder sources)"><input id="hubJiraKey" placeholder="JIRA project key (for JIRA)"></div><div class="field"><button class="primary" id="hubConnect">Connect and synchronize</button></div></details><div class="field"><button id="hubRefresh">Refresh sources</button></div><div id="hubManageStatus" role="status"></div></section>`;
+}
+let hubLastAction='';
+function wireHubManage(){
+ const show=t=>{hubLastAction=String(t);const el=$('hubManageStatus');if(el)el.textContent=hubLastAction};
+ if(hubLastAction)show(hubLastAction);
+ const refresh=()=>loadView('knowledge');
+ const connect=$('hubConnect');if(connect)connect.onclick=async()=>{
+  if(!requireProject())return;connect.disabled=true;show('Connecting source…');
+  try{const type=$('hubSourceType').value,key=$('hubJiraKey').value.trim().toUpperCase();const body={name:$('hubSourceName').value.trim(),source_type:type,location:$('hubSourceLocation').value.trim()||null,project_path:state.project,config:type==='JIRA'?{project_key:key}:{} };if(!body.name)throw Error('Source name is required');if(type==='JIRA'&&!key)throw Error('JIRA project key is required');if(type!=='JIRA'&&!body.location)throw Error('Folder path is required');const r=await api('/api/knowledge-sync/connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});show('Connected: '+fmt(r.status||'OK'));await refresh();}
+  catch(e){show(e.message)}finally{connect.disabled=false}
+ };
+ const ref=$('hubRefresh');if(ref)ref.onclick=async()=>{show('Refreshing registered sources and imported documents…');try{await refresh();hubLastAction='Source and document lists refreshed.';show(hubLastAction)}catch(e){show('Refresh failed: '+e.message)}};
+ document.querySelectorAll('[data-hub-sync]').forEach(b=>b.onclick=async()=>{
+  if(!requireProject())return;
+  const selectedProject=state.project;
+  b.disabled=true;show('Synchronizing folder and refreshing document counts…');
+  try{
+   const r=await api('/api/knowledge-sync/sources/'+b.dataset.hubSync+'/sync',{method:'POST'});
+   hubLastAction='Sync result: '+fmt(r);
+   if(state.project!==selectedProject)return;
+   // Refresh the complete Knowledge Hub after the POST has finished. A GET reload
+   // is required because the existing cards are snapshots of the previous response.
+   await loadView('knowledge');
+   const current=$('hubManageStatus');if(current)current.textContent=hubLastAction;
+  }catch(e){show('Synchronization failed: '+e.message)}finally{b.disabled=false}
+ });
+ document.querySelectorAll('[data-hub-toggle]').forEach(b=>b.onclick=async()=>{b.disabled=true;try{const id=b.dataset.hubToggle;if(b.dataset.hubEnabled==='1'){await api('/api/knowledge-sync/sources/'+id+'/disable',{method:'POST'});}else{const d=await api('/api/knowledge-sync/status');const x=(d.sources||[]).find(y=>String(y.id)===id&&normalizeProjectPath(y.project_path)===normalizeProjectPath(state.project));if(!x)throw Error('Source not found');await api('/api/knowledge-sync/sources/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:x.name,source_type:x.source_type,location:x.location,config:x.config||{},enabled:true,project_path:state.project})});}await refresh()}catch(e){show(e.message)}finally{b.disabled=false}});
+}
 async function loadKnowledgeHub(){if(!requireProject())return notice('Select an indexed project to load Knowledge Hub.');
  // Use the existing source APIs. Missing mapping API records can still be present in indexed documents.
- const paths=['/api/jira-knowledge','/api/mapping-intelligence/documents','/api/knowledge-base/documents'];
+ const mappingProject=await mappingDocumentProjectPath();
+ const paths=['/api/jira-knowledge','/api/mapping-intelligence/documents?'+new URLSearchParams({project_path:mappingProject}),'/api/knowledge-base/documents'];
  const requests=paths.map(path=>api(path));
- if(state.project)requests.push(api('/api/test-suites/search?'+new URLSearchParams({project_path:state.project})));
+ if(state.project)requests.push(api('/api/test-suites/documents?'+new URLSearchParams({project_path:state.project})));
  const responses=await Promise.allSettled(requests);
  const value=i=>responses[i]?.status==='fulfilled'?responses[i].value:null;
  const normalizedProject=String(state.project||'').replace(/\\/g,'/').replace(/\/$/,'').toLowerCase();
  const inProject=row=>!normalizedProject||!row.project_path||String(row.project_path).replace(/\\/g,'/').replace(/\/$/,'').toLowerCase()===normalizedProject;
  const jiras=hubUnique(hubRows(value(0),['issues','jiras']).filter(inProject),'jira');
- const mapped=hubRows(value(1),['documents']).filter(inProject);
+ const rawMapped=hubMappingDocuments(value(1));
+ const mapped=rawMapped; // Backend is authoritative for project filtering and reconciliation.
  const indexed=hubUnique(hubRows(value(2),['documents']).filter(inProject),'document');
- const mapping=hubUnique([...mapped,...indexed.filter(hubMappingDoc)],'document');
+ const indexedMappings=indexed.filter(hubMappingDoc);
+ const mapping=hubUnique([...mapped,...indexedMappings],'document');
+ const mappingRecords=Number(value(1)?.record_count ?? mapped.length);
+ const mappingFiles=Number(value(1)?.distinct_file_count ?? new Set(mapped.map(hubDocIdentity)).size);
+ const mappingSources=hubRows(await api('/api/knowledge-sync/status'),['sources']).filter(x=>x.source_type==='MAPPING_FOLDER'&&normalizeProjectPath(x.project_path)===normalizeProjectPath(state.project));
+ // Folder reconciliation happens in the mapping documents API. No inventory endpoint required.
+  const inventories=[];
  const qaPayload=value(3);
- const qaCases=Array.isArray(qaPayload?.test_cases)?qaPayload.test_cases:hubRows(qaPayload,['test_cases','cases']);
- const tests=hubUnique([...indexed.filter(hubTestDoc),...hubQaDocuments(qaCases)],'document');
+ const testRecords=Array.isArray(qaPayload?.documents)?qaPayload.documents:[];
+ const tests=hubUnique([...testRecords,...indexed.filter(hubTestDoc)],'document');
  const docRow=d=>`<div class="item"><strong>${esc(d.title||d.name||d.filename||d.document_name||'Imported document')}</strong><small>${esc([d.source_ref||d.path||d.filename||d.source_type||'',d.caseCount?`${d.caseCount} imported case(s)`:null].filter(Boolean).join(' · '))}</small>${hubLinks(d)?`<div class="hub-doc-links">${hubLinks(d)}</div>`:''}</div>`;
  const jiraRow=j=>item(j.jira_id||j.jira_key||j.issue_key||j.key||'JIRA',j.summary||j.title||j.requirement||j.description||'');
- let html=`<div class="hub-stats"><div><strong>${jiras.length}</strong><span>Saved JIRA issues</span></div><div><strong>${mapping.length}</strong><span>Mapping documents</span></div><div><strong>${tests.length}</strong><span>Test documents</span></div></div>`;
+ let html=await hubManagePanel();
+ html+=`<div class="hub-stats"><div><strong>${jiras.length}</strong><span>Saved JIRA issues</span></div><div><strong>${mappingFiles||mapping.length}</strong><span>Distinct mapping files</span></div><div><strong>${tests.length}</strong><span>Test documents</span></div></div>`;
  html+=hubSection('JIRA issues',jiras,jiraRow,'No saved JIRA issues returned for this project.');
- html+=hubSection('Mapping documents and URLs',mapping,docRow,'No mapping documents found in mapping or indexed document sources.');
+ html+=`<p class="ci-sub">Mapping document project: ${esc(mappingProject)}</p>`;
+ html+=`<p class="ci-sub">Mapping registry: ${mappingRecords} record(s) across ${mappingFiles} distinct file(s). Multiple records can represent versions or historical imports. Connected folder discovery is separate from imported mapping documents.</p>`;
+ html+=hubSection('Mapping documents and URLs',hubUnique(mapped.length?mapped:mapping,'document'),docRow,'No imported mapping documents were returned by the available document APIs.');
+ html+=`<p class="ci-sub">Imported mapping records (including historical versions): ${mappingRecords}. Distinct imported filenames: ${mappingFiles}. Expand a filename below to inspect individual database records.</p>`;
+ const grouped=new Map();for(const d of mapped){const key=hubDocIdentity(d);if(!grouped.has(key))grouped.set(key,[]);grouped.get(key).push(d)}
+ html+=`<details class="hub-section"><summary>Imported mapping versions and records (${mappingRecords})</summary><div class="hub-section-body">${[...grouped.values()].map(group=>`<details><summary>${esc(group[0].filename||group[0].title||'Mapping')} — ${group.length} record(s)</summary>${group.map(d=>`<div class="item"><strong>Record #${esc(d.id||'—')} · ${esc(d.document_version||'Unversioned')}</strong><small>${esc(d.mapping_family||'')} · ${Number(d.row_count)||0} mapping row(s) · ${esc(d.source_ref||'')}</small></div>`).join('')}</details>`).join('')||notice('No imported mapping records')}</div></details>`;
+  // Mapping folder inventory endpoint is not part of the backend contract; avoid spurious 404s.
+ if(!mapping.length)html+=hubMappingDiagnostics(value(1),rawMapped.length,mapped.length,indexedMappings.length);
+ html+=`<p class="ci-sub">Test document registry: ${Number(qaPayload?.record_count ?? testRecords.length)} active record(s) across ${Number(qaPayload?.distinct_file_count ?? tests.length)} distinct source(s). The test folder is reconciled before reading. Historical evidence remains available through include_history=true.</p>`;
  html+=hubSection('Test documents and attachments',tests,docRow,state.project?'No imported test documents returned for this project.':'Select a project to retrieve imported test suites.');
  // No ASK, QA retrieval, source status, generic search, or unrelated indexed-document panels.
  responses.forEach((r,i)=>{if(r.status==='rejected')html+=hubError(['Saved JIRA issues','Mapping documents','Indexed documents','Imported QA suites'][i],r.reason?.message||'Request failed')});
@@ -748,33 +980,88 @@ function wireBaselineCapture(){
  };
 }
 
-async function loadView(view){state.view=view;if(!state.project){setView(view);$('mainTitle').textContent='Project selection required';$('mainBody').innerHTML=notice('Choose an indexed project in the top navigation before opening a workspace.');return;}setView(view);const title=({impact:'Impact Analysis',knowledge:'Knowledge Hub',releases:'Release Intelligence',jira:'JIRA Intelligence',mappings:'Mapping Intelligence',tests:'Testing & Baselines',evaluation:'Evaluation & Diagnostics'})[view];if(view==='ask'){renderAnswer(state.result||{answer:'Ask a question to retrieve live CodeIntelligence evidence.'});return}let html=`<div class="section">`;try{if(view==='knowledge'){html+=await loadKnowledgeHub()}
+async function loadView(view){const epoch=++ciViewEpoch;const projectAtStart=state.project;state.view=view;if(!state.project){setView(view);$('mainTitle').textContent='Project selection required';$('mainBody').innerHTML=notice('Choose an indexed project in the top navigation before opening a workspace.');return;}setView(view);if(view!=='ask'){$('mainTitle').textContent=({impact:'Impact Analysis',knowledge:'Knowledge Hub',releases:'Release Intelligence',jira:'JIRA Intelligence',mappings:'Mapping Intelligence',tests:'Testing & Baselines',evaluation:'Evaluation & Diagnostics'})[view]||'Workspace';$('mainBody').innerHTML=notice('Loading '+$('mainTitle').textContent+' for the selected project…');setVisible('metrics',false);setVisible('insightsPanel',false);setVisible('rightbar',false);setVisible('bottomGrid',false);}const title=({impact:'Impact Analysis',knowledge:'Knowledge Hub',releases:'Release Intelligence',jira:'JIRA Intelligence',mappings:'Mapping Intelligence',tests:'Testing & Baselines',evaluation:'Evaluation & Diagnostics'})[view];if(view==='ask'){renderAnswer(state.result||{answer:'Ask a question to retrieve live CodeIntelligence evidence.'});return}let html=`<div class="section">`;try{if(view==='knowledge'){html+=await loadKnowledgeHub()}
 else if(view==='jira'){const data=await api('/api/jira-knowledge');html+=`<div class="field"><input id="jiraQuery" placeholder="Search Jira requirements, e.g. country code"><button id="jiraSearch" class="primary">Search</button></div><div id="jiraResults"></div><details open><summary>Indexed JIRA requirements (${listOf(data).length})</summary>${listOf(data).map(x=>item(x.jira_id||x.jira_key||x.key||'Jira',x.title||x.requirement||'')).join('')||notice('No indexed Jira issues')}</details>`}
-else if(view==='mappings'){const docs=await api('/api/mapping-intelligence/documents');html+=`<div class="field"><input id="mapAttribute" placeholder="Attribute e.g. countryCode"><button id="mapSearch" class="primary">Trace mappings</button></div><div id="mapResults"></div><details open><summary>Mapping documents (${listOf(docs).length})</summary>${listOf(docs).map(x=>item(x.title||x.filename||'Mapping',x.document_version||x.source_ref||'')).join('')||notice('No mapping documents')}</details>`}
+else if(view==='mappings'){const mappingProject=await mappingDocumentProjectPath();const docs=await api('/api/mapping-intelligence/documents?'+new URLSearchParams({project_path:mappingProject}));html+=`<div class="field"><input id="mapAttribute" placeholder="Attribute e.g. countryCode"><button id="mapSearch" class="primary">Trace mappings</button></div><div id="mapResults"></div><details open><summary>Mapping documents (${listOf(docs).length})</summary>${listOf(docs).map(x=>item(x.title||x.filename||'Mapping',x.document_version||x.source_ref||'')).join('')||notice('No mapping documents')}</details>`}
 else if(view==='impact'){html+=`<div class="impact-entry"><h3>Find related changes and evidence</h3><div class="field"><select id="impactMode" aria-label="Impact analysis entry point"><option value="jira">JIRA</option><option value="requirement">Business requirement</option><option value="attribute">Attribute</option></select><input id="impactAttribute" placeholder="JIRA key, e.g. CAS-10"><button id="impactSearch" class="primary">Analyze impact</button></div><div class="ci-sub">Project: ${esc(state.project||'Select a project in the top navigation')}</div></div><div id="impactResults"></div>`}
 else if(view==='releases'){html+=`<div class="field"><input id="releaseKey" value="OCT-2026" placeholder="Release key"><input id="releaseProject" readonly placeholder="Selected project"><button class="primary" id="releaseSearch">Load report</button></div><div id="releaseResults"></div><details><summary>Compare immutable baselines</summary><div class="field"><input id="fromVersion" type="number" min="1" value="1"><input id="toVersion" type="number" min="1" value="2"><button class="primary" id="releaseCompare">Compare</button></div><div id="compareResults"></div></details>${notice('Release snapshots preserve explicit release JIRAs, project documents, Git HEAD and recorded test evidence. Create the release with its JIRAs first.')}<div class="section"><h3>Immutable Release Snapshot</h3><div class="field"><input id="snapshotOwner" placeholder="Finalized by (required)"><button id="snapshotPreview" class="primary">Preview snapshot</button><button id="snapshotFinalize">Finalize snapshot</button></div><div id="snapshotResult"></div></div>`}
 else if(view==='tests'){html+=baselineCapturePanel();html+=`<div class="field"><input id="testQuery" value="test data for countryCode please"><button id="testSearch" class="primary">Retrieve QA evidence</button></div><div id="testResults"></div>${notice('Imported test plans and separately recorded execution evidence are distinguished by the backend.')}`}
 else if(view==='evaluation'){const health=await api('/health');const status=await api('/api/storage/status');html+=`<details open><summary>Backend health</summary><div class="evidence">${esc(fmt(health))}</div></details><details open><summary>Persistence status</summary><div class="evidence">${esc(fmt(status))}</div></details>${notice('No accuracy percentage is invented; use your existing RAG evaluation endpoints for measured metrics.')}`}
-}catch(e){html+=notice(e.message)}html+='</div>';$('mainTitle').textContent=title;$('mainBody').innerHTML=html;setVisible('insightsPanel',false);setVisible('rightbar',false);wireView(view)}
-function setView(v){document.body.classList.toggle('ci-ask-workspace',v==='ask');document.body.classList.toggle('ci-other-workspace',v!=='ask');document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('active',b.dataset.view===v))}
+}catch(e){html+=notice(e.message)}if(epoch!==ciViewEpoch||projectAtStart!==state.project||state.view!==view)return;html+='</div>';$('mainTitle').textContent=title;$('mainBody').innerHTML=html;setVisible('insightsPanel',false);setVisible('rightbar',false);wireView(view)}
+function setView(v){if(v==='ask')ciWorkspaceState(state.project?'Ready for investigation':'Select a project');document.body.classList.toggle('ci-ask-workspace',v==='ask');document.body.classList.toggle('ci-other-workspace',v!=='ask');document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('active',b.dataset.view===v))}
 function resultAt(id,v){$(id).innerHTML=`<div class="evidence">${esc(fmt(v))}</div>`}
-function wireView(v){const bind=(id,fn)=>{if($(id))$(id).onclick=async()=>{if(!requireProject())return;try{await fn()}catch(e){toast(e.message)}}};if(v==='jira')bind('jiraSearch',async()=>{const d=await api('/api/jira-knowledge/search?'+new URLSearchParams({query:$('jiraQuery').value,top_k:'15'}));$('jiraResults').innerHTML=listOf(d).map(x=>item(x.jira_id||x.jira_key||x.key||'JIRA',x.title||x.requirement||fmt(x))).join('')||notice('No matches')});if(v==='mappings')bind('mapSearch',async()=>resultAt('mapResults',await api('/api/mapping-intelligence/lineage?'+new URLSearchParams({attribute:$('mapAttribute').value}))));if(v==='impact'){
+function wireView(v){if(v==='knowledge')wireHubManage();const bind=(id,fn)=>{if($(id))$(id).onclick=async()=>{if(!requireProject())return;try{await fn()}catch(e){toast(e.message)}}};if(v==='jira')bind('jiraSearch',async()=>{const d=await api('/api/jira-knowledge/search?'+new URLSearchParams({query:$('jiraQuery').value,top_k:'15'}));$('jiraResults').innerHTML=listOf(d).map(x=>item(x.jira_id||x.jira_key||x.key||'JIRA',x.title||x.requirement||fmt(x))).join('')||notice('No matches')});if(v==='mappings')bind('mapSearch',async()=>resultAt('mapResults',await api('/api/mapping-intelligence/lineage?'+new URLSearchParams({attribute:$('mapAttribute').value}))));if(v==='impact'){
  const mode=$('impactMode'),field=$('impactAttribute');
  mode.onchange=()=>{field.placeholder=mode.value==='jira'?'JIRA key, e.g. CAS-10':mode.value==='requirement'?'Describe the new business requirement':'Attribute, e.g. countryCode';field.value=''};
  bind('impactSearch',async()=>{const value=field.value.trim();if(!value)return toast('Enter a JIRA, requirement or attribute');$('impactResults').innerHTML=notice('Searching indexed requirements, historical JIRAs and mapping evidence…');const r=await api('/api/requirement-impact/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:mode.value,value,project:state.project||null})});state.result=r;const target=$('impactResults');target.innerHTML=renderRequirementImpact(r);const qaButton=$('lookupImpactQa');if(qaButton)qaButton.onclick=()=>lookupImpactQa(r);retrieveImpactGit(r,mode.value,value,state.project,target);});
  }if(v==='releases'){let previewSha='';bind('snapshotPreview',async()=>{const key=$('releaseKey').value.trim();const d=await api('/api/release-snapshots/'+encodeURIComponent(key)+'/preview');previewSha=d.manifest?.git?.commit_sha||'';resultAt('snapshotResult',d)});bind('snapshotFinalize',async()=>{const key=$('releaseKey').value.trim(),by=$('snapshotOwner').value.trim();if(!by)throw Error('Enter finalized by');if(!previewSha)throw Error('Preview the snapshot first');if(!confirm('Finalize immutable release '+key+'? This cannot be overwritten.'))return;const d=await api('/api/release-snapshots/finalize',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({release_key:key,finalized_by:by,expected_git_sha:previewSha})});resultAt('snapshotResult',d)});if(state.project)$('releaseProject').value=state.project;bind('releaseSearch',async()=>resultAt('releaseResults',await api(`/api/sdlc/releases/${encodeURIComponent($('releaseKey').value)}/report?`+new URLSearchParams({project_path:state.project}))));bind('releaseCompare',async()=>resultAt('compareResults',await api(`/api/sdlc/releases/${encodeURIComponent($('releaseKey').value)}/compare?`+new URLSearchParams({project_path:state.project,from_version:$('fromVersion').value,to_version:$('toVersion').value})) ))}if(v==='tests'){wireBaselineCapture();bind('testSearch',async()=>{const d=await api('/api/knowledge-agent/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:$('testQuery').value})});$('testResults').innerHTML=testRecords(d).length?testEvidenceHtml(d):`<div class="ev-readable">${esc(textAnswer(d))}</div>`})}}
-async function projects(){
- const select=$('projectSelect');
+function projectKey(path){return String(path||'').replace(/\\/g,'/').replace(/\/$/,'').toLowerCase()}
+async function projects(preferred=''){
+ const select=$('projectSelect'), previous=preferred||select.value||state.project;
  try{
-  const rows=listOf(await api('/api/projects'));
-  const available=rows.map(x=>({path:String(x.path||x.project_path||x.directory||'').trim(),name:x.name||x.project_name||''})).filter(x=>x.path);
-  select.innerHTML='<option value="">Select a project (required)</option>'+available.map(x=>`<option value="${esc(x.path)}">${esc(x.name||x.path)}</option>`).join('');
-  select.required=true;
-  select.onchange=()=>changeProject(select.value);
-  // Explicit project selection is required for every new page session.
-  changeProject('');if(!available.length)toast('No indexed projects found. Index a project first.');
- }catch(e){select.innerHTML='<option value="">Projects unavailable</option>';changeProject('');toast('Could not load indexed projects: '+e.message)}
+  const response=await api('/api/projects');
+  const rows=Array.isArray(response)?response:(Array.isArray(response.projects)?response.projects:[]);
+  const activePath=String(response.active_project_path||'').trim();
+  const seen=new Set();const available=[];
+  for(const entry of rows){
+   const path=String(typeof entry==='string'?entry:(entry.path||entry.project_path||entry.directory||'')).trim();
+   if(!path||seen.has(projectKey(path)))continue;
+   seen.add(projectKey(path));available.push({path,name:typeof entry==='string'?path.split(/[\\/]/).pop():(entry.name||entry.project_name||path)});
+  }
+  select.innerHTML='<option value="">Select a project (required)</option>';
+  for(const entry of available){const option=document.createElement('option');option.value=entry.path;option.textContent=entry.name;select.appendChild(option)}
+  select.required=true;select.onchange=()=>changeProject(select.value);
+  const found=available.find(x=>projectKey(x.path)===projectKey(previous)) || available.find(x=>projectKey(x.path)===projectKey(activePath));
+  if(found){select.value=found.path;if(state.project!==found.path)changeProject(found.path)}
+  else if(state.project){changeProject('')}
+  if(!available.length)toast('No registered projects returned by the backend');
+ }catch(e){toast('Could not load projects: '+e.message);console.error('Project discovery failed',e)}
 }
-async function check(){try{await api('/health');$('connection').textContent='● Backend connected';$('connection').classList.add('online');await projects()}catch(e){$('connection').textContent='● Backend offline';$('connection').title=e.message}}
-$('run').onclick=run;$('question').addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();run()}});$('followupSend').onclick=()=>{const q=$('followup').value.trim();if(q){$('question').value=q;$('followup').value='';run()}};$('followup').onkeydown=e=>{if(e.key==='Enter')$('followupSend').click()};$('newAnalysis').onclick=()=>{$('question').value='';state.result=null;loadView('ask');$('question').focus()};$('clearRecent').onclick=()=>{state.recent=[];try{localStorage.removeItem('ci_recent')}catch{}renderRecent()};$('export').onclick=()=>{if(!state.result)return toast('No evidence to export');const b=new Blob([JSON.stringify(state.result,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='codeintelligence-evidence.json';a.click();URL.revokeObjectURL(a.href)};
-document.querySelectorAll('#nav button').forEach(b=>b.onclick=()=>loadView(b.dataset.view));$('workspaceMenu').onchange=()=>{if($('workspaceMenu').value)loadView($('workspaceMenu').value);$('workspaceMenu').value=''};document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));document.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>loadView(b.dataset.open));document.querySelectorAll('[data-tab-jump]').forEach(b=>b.onclick=()=>{loadView('ask');showTab(b.dataset.tabJump)});document.querySelectorAll('[data-question]').forEach(b=>b.onclick=()=>{$('question').value=b.dataset.question;run()});try{state.recent=JSON.parse(localStorage.getItem('ci_recent')||'[]')}catch{}renderRecent();renderAnswer({answer:'Ask a question to retrieve live CodeIntelligence evidence.'});setVisible('insightsPanel',false);updateProjectGate();check();
+function setupProjectDialog(){
+ const button=$('addProjectBtn'),dialog=$('addProjectDialog'),form=$('addProjectForm'),status=$('addProjectStatus');
+ if(!button||!dialog||!form)return;
+ button.onclick=()=>{status.textContent='';dialog.showModal()};
+ if($('cancelProjectBtn'))$('cancelProjectBtn').onclick=()=>dialog.close();
+ form.onsubmit=async e=>{
+  e.preventDefault();const mode=$('addProjectMode').value, value=$('addProjectValue').value.trim();if(!value)return;
+  const submit=$('submitProjectBtn');submit.disabled=true;status.textContent='Registering project. Initial indexing may take several minutes…';
+  try{
+   const endpoint=mode==='git'?'/api/projects/import-git':'/api/projects/register';
+   const payload=mode==='git'?{repository_url:value}:{project_path:value};
+   const existing=mode==='local' ? Array.from($('projectSelect').options).find(o=>projectKey(o.value)===projectKey(value)) : null;
+   if(existing){await projects(existing.value);dialog.close();toast('Existing project selected; no indexing needed');return;}
+   const result=await api(endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+   const path=result.project?.path||result.project_path;
+   await projects(path||'');dialog.close();toast('Project registered and indexed');
+  }catch(err){status.textContent='Failed: '+err.message;console.error(err)}finally{submit.disabled=false}
+ };
+}
+async function check(){
+ // Project discovery must run independently of the health endpoint.
+ const connection=$('connection');
+ try{
+  await api('/health');
+  if(connection){connection.textContent='● Backend connected';connection.classList.add('online');connection.title='';}
+ }catch(e){
+  if(connection){connection.textContent='● Health check unavailable';connection.classList.remove('online');connection.title=e.message;}
+  console.warn('Health check failed; loading registered projects anyway:',e);
+ }
+ let preferred='';
+ try{preferred=localStorage.getItem('ci_selected_project')||''}catch(_e){}
+ await projects(preferred);
+}
+// Optional toolbar controls vary between UI templates. Never abort startup if one is absent.
+function ciBindClick(id, handler){const element=$(id);if(element)element.onclick=handler;}
+setupProjectDialog();
+ciBindClick('refreshProjectsBtn',()=>projects());
+ciBindClick('syncProjectBtn',syncSelectedProject);
+ciBindClick('run',run);
+const ciQuestion=$('question');
+if(ciQuestion)ciQuestion.addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();run()}});
+ciBindClick('followupSend',()=>{const followup=$('followup');if(!followup||!ciQuestion)return;const q=followup.value.trim();if(q){ciQuestion.value=q;followup.value='';run()}});
+const ciFollowup=$('followup');
+if(ciFollowup)ciFollowup.onkeydown=e=>{if(e.key==='Enter'){const send=$('followupSend');if(send)send.click()}};
+ciBindClick('newAnalysis',()=>{if(ciQuestion)ciQuestion.value='';state.result=null;ciLiveReset(state.project);loadView('ask');if(ciQuestion)ciQuestion.focus()});
+ciBindClick('clearRecent',()=>{state.recent=[];try{localStorage.removeItem('ci_recent')}catch{}renderRecent()});
+ciBindClick('export',()=>{if(!state.result)return toast('No evidence to export');const b=new Blob([JSON.stringify(state.result,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='codeintelligence-evidence.json';a.click();URL.revokeObjectURL(a.href)});
+document.querySelectorAll('#nav button').forEach(b=>b.onclick=()=>loadView(b.dataset.view));if($('workspaceMenu'))$('workspaceMenu').onchange=()=>{if($('workspaceMenu').value)loadView($('workspaceMenu').value);$('workspaceMenu').value=''};document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));document.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>loadView(b.dataset.open));document.querySelectorAll('[data-tab-jump]').forEach(b=>b.onclick=()=>{loadView('ask');showTab(b.dataset.tabJump)});document.querySelectorAll('[data-question]').forEach(b=>b.onclick=()=>{$('question').value=b.dataset.question;run()});try{state.recent=JSON.parse(localStorage.getItem('ci_recent')||'[]')}catch{}renderRecent();renderAnswer({answer:'Ask a question to retrieve live CodeIntelligence evidence.'});ciWorkspaceState('Select a project to begin');setVisible('insightsPanel',false);updateProjectGate();check();

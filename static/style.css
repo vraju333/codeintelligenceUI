@@ -86,3 +86,38 @@ body.ci-other-workspace .workspace{width:100%;min-width:0}
 .ci-baseline-fields{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 .ci-baseline-actions{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0}
 @media(max-width:650px){.ci-baseline-fields{grid-template-columns:1fr}}
+
+/* Project-scoped Knowledge Hub synchronization in the top navigation. */
+#ciProjectTop{display:inline-flex;align-items:center;gap:7px;flex-wrap:wrap}
+.ci-project-sync{border:1px solid #4b8dbd;background:#153a5a;color:#e8f5ff;border-radius:7px;padding:6px 10px;cursor:pointer;white-space:nowrap;font-size:12px}
+.ci-project-sync:hover:not(:disabled){background:#235a83}
+.ci-project-sync:disabled{opacity:.5;cursor:not-allowed}
+#syncProjectStatus{font-size:11px;color:#a8cde7;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* Phase 11 incremental event-driven ASK experience */
+.ci-live{padding:12px 16px;margin-bottom:12px;border-color:#31577b}
+.ci-live-header{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.ci-live-timeline{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px}
+.ci-live-step{border:1px solid #34516a;background:#142d43;border-radius:7px;padding:6px 9px;color:#b8d4e9;font-size:12px}
+.ci-live-step.done{border-color:#296857;color:#80dfb4}
+.ci-live-step.error{border-color:#8c4949;color:#ffb3b3}
+.ci-live-evidence{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:9px;margin-top:12px}
+.ci-live-evidence:empty{display:none}
+.ci-live-card{border:1px solid #34536d;background:#12293d;border-radius:8px;min-width:0}
+.ci-live-card summary{padding:10px 12px;cursor:pointer;font-size:12px;font-weight:650;color:#b5dcff}
+.ci-live-card-detail{padding:0 12px 12px}
+.ci-live-classification{font-size:10px;color:#95b8d4}
+.ci-live-card pre{max-height:240px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;color:#c6d9e8}
+
+/* Phase 11: persistent event-driven investigation workspace */
+body.ci-other-workspace #ciLive{display:none!important}
+.ci-live{background:linear-gradient(115deg,#102b43,#102234);border:1px solid #3978a6;box-shadow:0 6px 22px #06132166}
+.ci-live-header strong{font-size:14px;color:#d8edff}
+.ci-live-protocol{display:inline-block;font-size:10px;color:#91c6ef;font-weight:500;margin-left:8px}
+.ci-live[data-status=done]{border-color:#2b8c79}
+.ci-live[data-status=error]{border-color:#b85b5b}
+.ci-live[data-status=warning]{border-color:#b38c49}
+.ci-live-timeline:empty::after{content:'Waiting for a question or project sync';color:#93b1c8;font-size:12px}
+.ci-sync-ready{padding:22px;background:linear-gradient(120deg,#102b40,#142d3a);border:1px solid #315f79;border-radius:10px;margin:12px}
+.ci-sync-ready h3{margin:0 0 12px;color:#9de1cc}
+.ci-sync-ready p{color:#c0d5e6}
